@@ -1,0 +1,21 @@
+name: molecular-dynamics-tools
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - mdanalysis>=2.6
+  - freud>=3.0
+  - numpy>=1.24
+  - pandas>=2.0
+  - periodictable>=1.6
+  - scipy>=1.10
+  - threadpoolctl>=3.1
+  - matplotlib>=3.7
+  - tqdm>=4.65
+  - pytest>=7.4
+  - pytest-cov>=4.1
+  - ruff>=0.5
+  - build>=1.0
+  - pip:
+      - -e .

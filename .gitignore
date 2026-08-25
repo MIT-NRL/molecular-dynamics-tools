@@ -1,0 +1,56 @@
+# Python bytecode and extension modules
+__pycache__/
+*.py[cod]
+*.so
+
+# Packaging output
+*.egg
+*.egg-info/
+build/
+dist/
+
+# Test, coverage, type-checker, and linter caches
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.hypothesis/
+.mypy_cache/
+.nox/
+.pytest_cache/
+.ruff_cache/
+.tox/
+
+# Local Python and conda environments
+.conda/
+.env
+.env.local
+.venv/
+env/
+venv/
+
+# Editors, notebooks, and operating-system metadata
+.DS_Store
+.idea/
+.ipynb_checkpoints/
+.vscode/
+*~
+
+# Logs and local scratch space
+*.log
+scratch/
+
+# Generated benchmarks, figures, tables, and analysis products
+artifacts/
+
+# Large molecular-dynamics trajectory formats should remain outside the repo.
+*.dcd
+*.dump
+*.h5
+*.hdf5
+*.lammpstrj
+*.nc
+*.tng
+*.trr
+*.trz
+*.xtc

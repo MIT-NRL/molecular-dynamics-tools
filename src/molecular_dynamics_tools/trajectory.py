@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
+import tempfile
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +36,8 @@ class TrajectorySource:
     format: str | None
     atom_attribute: str
     shift_by_origin: bool
+    frame_species_codes: NDArray[np.uint8] | None = None
+    species_labels: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -135,10 +139,14 @@ class Trajectory:
         )
         if self.source.shift_by_origin and origin is not None:
             positions -= origin.astype(np.float32)
+        labels = self._atom_labels
+        if self.source.frame_species_codes is not None:
+            codes = self.source.frame_species_codes[logical_index]
+            labels = np.asarray(self.source.species_labels, dtype=str)[codes]
         return TrajectoryFrame(
             logical_index,
             location.source_index,
-            self._atom_labels,
+            labels,
             positions,
             np.asarray(dimensions, dtype=np.float64),
             origin,
@@ -306,6 +314,212 @@ def _read_xyz_headers(reader: XYZReader, source_indices: Sequence[int]) -> dict[
     return headers
 
 
+def _read_xyz_species_codes(
+    reader: XYZReader,
+    source_indices: Sequence[int],
+) -> tuple[NDArray[np.uint8] | None, tuple[str, ...]]:
+    """Return compact per-frame labels when XYZ row order changes.
+
+    Labels are streamed directly into a compact code matrix.  This avoids
+    retaining a Python string object for every atom in every selected frame.
+    """
+    offsets = getattr(reader, "_offsets", None)
+    row_for_source = {source_index: row for row, source_index in enumerate(source_indices)}
+    codes: NDArray[np.uint8] | None = None
+    reference_codes: NDArray[np.uint8] | None = None
+    species_labels: tuple[str, ...] = ()
+    lookup: dict[str, int] = {}
+    dynamic_order = False
+
+    def read_labels(handle, source_index: int) -> list[str]:
+        try:
+            atom_count = int(handle.readline())
+        except ValueError as exc:
+            raise ValueError(f"invalid atom count at XYZ frame {source_index}") from exc
+        handle.readline()
+        labels: list[str] = []
+        for _ in range(atom_count):
+            fields = handle.readline().split(maxsplit=1)
+            if not fields:
+                raise ValueError(f"incomplete XYZ atom block at frame {source_index}")
+            labels.append(fields[0])
+        return labels
+
+    def store_labels(labels: list[str], row: int) -> None:
+        nonlocal codes, reference_codes, species_labels, lookup, dynamic_order
+        if codes is None:
+            species_labels = tuple(sorted(set(labels)))
+            if len(species_labels) > np.iinfo(np.uint8).max + 1:
+                raise ValueError("XYZ trajectory contains too many species for compact labels")
+            lookup = {label: index for index, label in enumerate(species_labels)}
+            codes = np.empty((len(source_indices), len(labels)), dtype=np.uint8)
+        if len(labels) != codes.shape[1] or set(labels) != set(species_labels):
+            raise ValueError("XYZ frame species must be consistent across the selected frames")
+        row_codes = np.fromiter((lookup[label] for label in labels), dtype=np.uint8, count=len(labels))
+        codes[row] = row_codes
+        if reference_codes is None:
+            reference_codes = row_codes.copy()
+        elif not np.array_equal(row_codes, reference_codes):
+            dynamic_order = True
+
+    with util.anyopen(reader.filename) as handle:
+        if offsets is None:
+            requested = set(source_indices)
+            for source_index in range(max(requested) + 1):
+                if source_index in requested:
+                    store_labels(read_labels(handle, source_index), row_for_source[source_index])
+                else:
+                    try:
+                        atom_count = int(handle.readline())
+                    except ValueError as exc:
+                        raise ValueError(f"invalid atom count at XYZ frame {source_index}") from exc
+                    handle.readline()
+                    for _ in range(atom_count):
+                        if not handle.readline():
+                            raise ValueError(f"incomplete XYZ atom block at frame {source_index}")
+        else:
+            for source_index in source_indices:
+                try:
+                    handle.seek(offsets[source_index])
+                except IndexError as exc:
+                    raise IndexError(f"source frame {source_index} does not exist") from exc
+                store_labels(read_labels(handle, source_index), row_for_source[source_index])
+    if codes is None:
+        raise ValueError("XYZ trajectory did not provide any selected frames")
+    if not dynamic_order:
+        return None, ()
+    codes.setflags(write=False)
+    return codes, species_labels
+
+
+def _xyz_species_sequence_for_frame(
+    filename: str | Path,
+    frame_index: int,
+    atom_count: int,
+) -> list[str] | None:
+    """Read the ordered species labels for one XYZ frame."""
+
+    frame_start = frame_index * (atom_count + 2) + 2
+    labels: list[str] = []
+    with Path(filename).open("r", encoding="utf-8", errors="replace") as handle:
+        for line_index, line in enumerate(handle):
+            if line_index < frame_start:
+                continue
+            if line_index >= frame_start + atom_count:
+                break
+            fields = line.split(maxsplit=1)
+            if not fields:
+                return None
+            labels.append(fields[0])
+    return labels if len(labels) == atom_count else None
+
+
+def xyz_has_variable_species_order(
+    filename: str | Path,
+    sample_frames: Sequence[int] = (0, 1, 10, 100),
+) -> bool:
+    """Quickly detect an XYZ trajectory whose atom rows change species order."""
+
+    source = Path(filename)
+    with source.open("r", encoding="utf-8", errors="replace") as handle:
+        try:
+            atom_count = int(handle.readline().strip())
+        except ValueError as exc:
+            raise ValueError("XYZ file does not begin with an atom count") from exc
+    reference = _xyz_species_sequence_for_frame(source, 0, atom_count)
+    if reference is None:
+        return False
+    return any(
+        sequence is not None and sequence != reference
+        for sequence in (
+            _xyz_species_sequence_for_frame(source, frame_index, atom_count)
+            for frame_index in sample_frames[1:]
+        )
+    )
+
+
+def normalize_xyz_species_order(
+    filename: str | Path,
+    output_filename: str | Path | None = None,
+) -> str:
+    """Create or reuse an XYZ cache with a stable per-frame species order.
+
+    Structural calculations do not require persistent atom identities, but
+    MDAnalysis does retain labels from the first XYZ frame.  Reordering every
+    frame by the first-frame species sequence makes its static labels valid and
+    avoids carrying a full per-frame label table into multiprocessing workers.
+    """
+
+    source = Path(filename).expanduser()
+    with source.open("r", encoding="utf-8", errors="replace") as handle:
+        try:
+            atom_count = int(handle.readline().strip())
+        except ValueError as exc:
+            raise ValueError("XYZ file does not begin with an atom count") from exc
+        if not handle.readline():
+            raise ValueError("Malformed XYZ file: missing first frame header")
+        first_lines = [handle.readline() for _ in range(atom_count)]
+    if len(first_lines) != atom_count or any(line == "" for line in first_lines):
+        raise ValueError("Malformed XYZ file: incomplete first atom block")
+
+    species_order: list[str] = []
+    species_rank: dict[str, int] = {}
+    for line in first_lines:
+        fields = line.split(maxsplit=1)
+        if not fields:
+            raise ValueError("Malformed XYZ file: empty atom line")
+        species = fields[0]
+        if species not in species_rank:
+            species_rank[species] = len(species_order)
+            species_order.append(species)
+
+    if output_filename is None:
+        cache_dir = Path(tempfile.gettempdir()) / "mdt_xyz_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        stat = source.stat()
+        digest = hashlib.sha1(
+            f"{source.resolve()}|{stat.st_size}|{stat.st_mtime_ns}".encode("utf-8")
+        ).hexdigest()[:12]
+        destination = cache_dir / f"{source.stem}_{digest}_species_ordered{source.suffix}"
+    else:
+        destination = Path(output_filename).expanduser()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        return str(destination)
+
+    with source.open("r", encoding="utf-8", errors="replace") as fin, destination.open(
+        "w", encoding="utf-8", newline=""
+    ) as fout:
+        while True:
+            atom_count_line = fin.readline()
+            if not atom_count_line:
+                break
+            header_line = fin.readline()
+            if not header_line:
+                raise ValueError("Malformed XYZ file: missing frame header")
+            try:
+                frame_atom_count = int(atom_count_line.strip())
+            except ValueError as exc:
+                raise ValueError("Malformed XYZ file: invalid atom count") from exc
+            atom_lines = [fin.readline() for _ in range(frame_atom_count)]
+            if len(atom_lines) != frame_atom_count or any(line == "" for line in atom_lines):
+                raise ValueError("Malformed XYZ file: incomplete atom block")
+            grouped: dict[str, list[str]] = {}
+            for line in atom_lines:
+                fields = line.split(maxsplit=1)
+                if not fields:
+                    raise ValueError("Malformed XYZ file: empty atom line")
+                species = fields[0]
+                if species not in species_rank:
+                    species_rank[species] = len(species_order)
+                    species_order.append(species)
+                grouped.setdefault(species, []).append(line)
+            fout.write(atom_count_line)
+            fout.write(header_line)
+            for species in species_order:
+                fout.writelines(grouped.get(species, ()))
+    return str(destination)
+
 def _atom_labels(universe: mda.Universe, requested: str) -> tuple[str, NDArray[np.str_]]:
     attributes = ("elements", "names", "types") if requested == "auto" else (requested,)
     for attribute in attributes:
@@ -339,6 +553,7 @@ def load_trajectory(
     box: ArrayLike | None = None,
     shift_by_origin: bool = False,
     atom_attribute: str = "auto",
+    normalize_species_order: str | bool = "auto",
     format: str | None = None,
     topology_format: str | None = None,
     **universe_kwargs: Any,
@@ -349,14 +564,28 @@ def load_trajectory(
     metadata that MDAnalysis's XYZ reader otherwise discards.
     """
 
+    if normalize_species_order not in ("auto", True, False):
+        raise ValueError("normalize_species_order must be 'auto', True, or False")
+    normalized_xyz = False
     if isinstance(topology, mda.Universe):
         if coordinates is not None or format is not None or topology_format is not None:
             raise ValueError("coordinates and format arguments cannot accompany a Universe")
         if universe_kwargs:
             raise ValueError("Universe constructor options cannot accompany a Universe")
+        if normalize_species_order != "auto":
+            raise ValueError("normalize_species_order cannot accompany a Universe")
         universe = topology
     else:
-        args: list[Any] = [str(Path(topology).expanduser())]
+        input_path = Path(topology).expanduser()
+        load_path = input_path
+        if coordinates is None and input_path.suffix.lower() == ".xyz" and normalize_species_order:
+            should_normalize = normalize_species_order is True
+            if normalize_species_order == "auto":
+                should_normalize = xyz_has_variable_species_order(input_path)
+            if should_normalize:
+                load_path = Path(normalize_xyz_species_order(input_path))
+                normalized_xyz = True
+        args: list[Any] = [str(load_path)]
         if coordinates is not None:
             if isinstance(coordinates, (str, Path)):
                 args.append(str(Path(coordinates).expanduser()))
@@ -374,6 +603,12 @@ def load_trajectory(
     reader_format = getattr(universe.trajectory, "format", None)
     if isinstance(universe.trajectory, XYZReader):
         headers = _read_xyz_headers(universe.trajectory, source_indices)
+        if normalized_xyz:
+            frame_species_codes, species_labels = None, ()
+        else:
+            frame_species_codes, species_labels = _read_xyz_species_codes(
+                universe.trajectory, source_indices
+            )
         locations = tuple(
             FrameLocation(
                 index,
@@ -385,6 +620,8 @@ def load_trajectory(
         if any(location.dimensions is None for location in locations):
             raise ValueError("XYZ frames have no Lattice field; pass box=... to load_trajectory")
     else:
+        frame_species_codes = None
+        species_labels = ()
         locations = tuple(FrameLocation(index, box_override, None) for index in source_indices)
     if box_override is not None:
         universe.dimensions = np.asarray(box_override, dtype=np.float32)
@@ -398,6 +635,8 @@ def load_trajectory(
         format=None if reader_format is None else str(reader_format),
         atom_attribute=resolved_attribute,
         shift_by_origin=bool(shift_by_origin),
+        frame_species_codes=frame_species_codes,
+        species_labels=species_labels,
     )
     return Trajectory(universe, source, labels)
 
@@ -408,4 +647,6 @@ __all__ = [
     "TrajectoryFrame",
     "TrajectorySource",
     "load_trajectory",
+    "normalize_xyz_species_order",
+    "xyz_has_variable_species_order",
 ]

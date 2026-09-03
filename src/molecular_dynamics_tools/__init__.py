@@ -33,7 +33,13 @@ if TYPE_CHECKING:
         plot_structure_factor,
         plot_weighted_rdf,
     )
-    from .trajectory import Trajectory, TrajectoryFrame, load_trajectory
+    from .trajectory import (
+        Trajectory,
+        TrajectoryFrame,
+        load_trajectory,
+        normalize_xyz_species_order,
+        xyz_has_variable_species_order,
+    )
 
 
 _LAZY_EXPORTS = {
@@ -119,6 +125,12 @@ _LAZY_EXPORTS = {
         "ScatteringResult",
     ),
     "load_trajectory": ("molecular_dynamics_tools.trajectory", "load_trajectory"),
+    "normalize_xyz_species_order": (
+        "molecular_dynamics_tools.trajectory", "normalize_xyz_species_order"
+    ),
+    "xyz_has_variable_species_order": (
+        "molecular_dynamics_tools.trajectory", "xyz_has_variable_species_order"
+    ),
     "Trajectory": ("molecular_dynamics_tools.trajectory", "Trajectory"),
     "TrajectoryFrame": ("molecular_dynamics_tools.trajectory", "TrajectoryFrame"),
 }
@@ -163,6 +175,8 @@ __all__ = [
     "compute_scattering_weights",
     "compute_spectral_rdfs",
     "load_trajectory",
+    "normalize_xyz_species_order",
+    "xyz_has_variable_species_order",
     "analyze_bridging_clusters",
     "analyze_polyhedra",
     "summarize_coordination",

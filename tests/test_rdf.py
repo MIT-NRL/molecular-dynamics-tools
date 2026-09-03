@@ -1,14 +1,17 @@
 """RDF correctness and multiprocessing tests."""
 
-from pathlib import Path
+import os
 import tempfile
 import unittest
+from pathlib import Path
 
+import MDAnalysis as mda
 import numpy as np
+from threadpoolctl import threadpool_info
 
 from molecular_dynamics_tools import (
-    compute_scattering,
     compute_rdfs,
+    compute_scattering,
     compute_spectral_rdfs,
     load_trajectory,
 )
@@ -17,8 +20,6 @@ from molecular_dynamics_tools._execution import (
     freud_thread_limit,
     plan_execution,
 )
-from threadpoolctl import threadpool_info
-
 
 LARGE_TRAJECTORY = Path(
     "/home/sfayfar/Python/Cluster_MD_Calcs/Trajectory/"
@@ -52,6 +53,7 @@ class RDFTests(unittest.TestCase):
         self.trajectory = load_trajectory(self.path)
 
     def tearDown(self) -> None:
+        self.trajectory.universe.trajectory.close()
         self.temp_directory.cleanup()
 
     def test_serial_and_multiprocessing_are_numerically_identical(self) -> None:
@@ -82,7 +84,8 @@ class RDFTests(unittest.TestCase):
         self.assertFalse(execution["coordinate_precache"])
         self.assertEqual(execution["trajectory_backend"], "MDAnalysis.Universe")
         self.assertEqual(execution["universe_transfer"], "worker initializer")
-        self.assertEqual(execution["worker_affinity_counts"], (4,))
+        expected_affinity = (4,) if hasattr(os, "sched_getaffinity") else (os.cpu_count(),)
+        self.assertEqual(execution["worker_affinity_counts"], expected_affinity)
 
     def test_step_sets_a_consistent_bin_width(self) -> None:
         result = compute_rdfs(
@@ -112,6 +115,37 @@ class RDFTests(unittest.TestCase):
                 ncore=1,
                 show_progress=False,
             )
+
+    def test_triclinic_radius_is_validated_before_freud_query(self) -> None:
+        universe = mda.Universe.empty(4)
+        universe.add_TopologyAttr("names", ["A", "A", "B", "B"])
+        coordinates = np.asarray(
+            [[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]],
+            dtype=np.float32,
+        )
+        dimensions = np.asarray([[10.0, 11.0, 12.0, 68.75, 74.48, 80.21]])
+        universe.load_new(coordinates, order="fac", dimensions=dimensions)
+        trajectory = load_trajectory(universe, atom_attribute="names")
+
+        with self.assertRaisesRegex(ValueError, "safe periodic radius.*source frame 0"):
+            compute_spectral_rdfs(
+                trajectory,
+                pairs=[("A", "B")],
+                modes=4,
+                step=0.2,
+                r_range=(0.0, 4.9),
+                ncore=1,
+            )
+
+        automatic = compute_spectral_rdfs(
+            trajectory,
+            pairs=[("A", "B")],
+            modes=4,
+            step=0.2,
+            r_range=(0.0, None),
+            ncore=1,
+        )
+        self.assertLess(automatic.attrs["spectral"]["r_max"], 4.9)
 
     def test_all_unique_pairs_are_the_default(self) -> None:
         result = compute_rdfs(

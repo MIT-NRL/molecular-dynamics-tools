@@ -4,9 +4,8 @@
 molecular-dynamics trajectory and structural-analysis tools.
 
 The package is a clean rebuild of the original `MolecularDynamicsTools.py`
-helper module. Trajectory import, partial RDFs, and scattering calculations are
-implemented; the remaining analysis domains will be migrated individually.
-The public API is still evolving while that migration is in progress.
+helper module. It provides trajectory import, RDFs, scattering, coordination,
+bond-angle, and cluster-network calculations behind a consistent public API.
 
 ## Implemented
 
@@ -17,14 +16,15 @@ The public API is still evolving while that migration is in progress.
 - Serial and multiprocessing histogram and spectral RDF calculations
 - Faber–Ziman and Ashcroft–Langreth neutron/X-ray scattering calculations
 - FFT partial structure factors and normalized weighted radial distributions
+- Cutoff and relative-angular-distance (RAD) coordination distributions
+- Bond-angle probability densities
+- Direct cutoff-bond cluster distributions
+- Bridging-ligand corner/edge/face sharing and periodic percolation
 - One shared total-core contract for analysis functions
 - File-backed workers without coordinate precaching
 
 ## Planned
 
-- Coordination-number and RAD analyses
-- Bond-angle distributions
-- Pair, polyhedron, and percolation clustering
 - Specialized local-environment analyses
 
 See [docs/architecture.md](docs/architecture.md) for module boundaries and
@@ -58,19 +58,19 @@ python -m pip install -e ".[plot]"
 
 ## Trajectory and RDF workflow
 
-The distribution name uses hyphens, while the Python import uses underscores:
+The distribution name uses hyphens, while the Python import uses underscores.
+Trajectories can be used as context managers so file handles close promptly:
 
 ```python
 import molecular_dynamics_tools as mdt
 
-trajectory = mdt.load_trajectory("simulation.xyz")
-
-rdfs = mdt.compute_rdfs(
-    trajectory,
-    step=0.02,
-    r_range=(0.0, None),
-    ncore=128,
-)
+with mdt.load_trajectory("simulation.xyz") as trajectory:
+    rdfs = mdt.compute_rdfs(
+        trajectory,
+        step=0.02,
+        r_range=(0.0, None),
+        ncore=24,
+    )
 ```
 
 `load_trajectory` returns a package-owned `Trajectory` wrapper whose public
@@ -110,7 +110,10 @@ rdfs = mdt.compute_rdfs(trajectory, step=0.02, r_range=(0.0, None))
 ```
 
 If the safe radial range is not an exact multiple of `step`, the incomplete
-final bin is omitted. `bins` and `step` cannot be supplied together.
+final bin is omitted. For triclinic cells, the safe radius is half the shortest
+perpendicular face separation rather than half the shortest lattice vector.
+Explicit ranges are validated against every selected frame before workers are
+started. `bins` and `step` cannot be supplied together.
 
 Smooth spectral RDFs are available as a separate calculator:
 
@@ -145,6 +148,111 @@ clamped to 128--1,024 frames or the available trajectory length. Fit diagnostics
 are stored under `result.attrs["spectral"]["auto"]`. Spectral `step` controls
 the returned sampling grid; it does not create bins. The standard histogram
 calculator remains the default recommendation.
+
+## Coordination and bond-angle workflow
+
+Cutoff coordination accepts one or more `(center, neighbor, r_max)` or
+`(center, neighbor, r_min, r_max)` definitions and streams them in one pass:
+
+```python
+coordination = mdt.compute_coordination(
+    trajectory,
+    [
+        ("Be", "F", 2.35),
+        ("Li", "F", 2.75),
+        ("Cs", "F", 3.50),
+    ],
+    ncore=24,
+)
+summary = mdt.summarize_coordination(coordination)
+```
+
+RAD coordination does not use a distance cutoff. Directed mode asks which
+neighbors are in each center atom's RAD shell; mutual mode retains a bond only
+when both atoms include one another:
+
+```python
+directed = mdt.compute_rad_coordination(
+    trajectory,
+    [("Be", "F"), ("Li", "F")],
+    bond_mode="directed",
+    ncore=24,
+)
+mutual = mdt.compute_rad_coordination(
+    trajectory,
+    [("Be", "F")],
+    bond_mode="mutual",
+    ncore=24,
+)
+```
+
+Bond-angle definitions are `(first, center, third, first_center_max,
+center_third_max)`. Equivalent outer atoms are counted as unordered pairs when
+their cutoffs match, avoiding duplicate angles:
+
+```python
+angles = mdt.compute_bond_angles(
+    trajectory,
+    [
+        ("F", "Be", "F", 2.35, 2.35),
+        ("Be", "F", "Be", 2.35, 2.35),
+    ],
+    bins=180,
+    ncore=24,
+)
+```
+
+All returned tables store execution details in `result.attrs["execution"]`.
+Use `CoordinationDefinition` or `AngleDefinition` when two definitions would
+otherwise have the same generated column name and need explicit labels.
+
+## Cluster workflow
+
+The cluster API deliberately separates two graph definitions.
+
+`compute_cutoff_clusters` builds direct atomic bonds from distance cutoffs:
+
+```python
+cutoff_clusters = mdt.compute_cutoff_clusters(
+    trajectory,
+    [("Be", "F", 2.35), ("Cs", "F", 3.50)],
+    normalize="atom1",
+    include_unbonded=False,
+    ncore=24,
+)
+```
+
+With `normalize="atom1"`, cluster size is the number of first-species atoms
+and the distribution is sampled once per first-species atom. With
+`normalize="total"`, size is the total number of selected atoms and the
+distribution is sampled once per connected component.
+
+`analyze_bridging_clusters` constructs polyhedra from center-ligand bonds and
+connects centers through shared ligands. The center-ligand neighbor graph is
+built once per frame and reused for all sharing and percolation results:
+
+```python
+network = mdt.analyze_bridging_clusters(
+    trajectory,
+    center="Be",
+    ligand="F",
+    r_center_ligand=2.35,
+    min_shared_ligands=1,
+    ncore=24,
+)
+
+network.sharing_distribution              # shared-ligand count and type
+network.cluster_distribution              # corner/edge/face/connected clusters
+network.frame_summary                     # links and wrapping per frame
+network.percolation_cluster_distribution  # total and finite component counts
+network.percolation_summary               # means, deviations, wrap probabilities
+```
+
+One shared ligand is corner sharing, two is edge sharing, and three or more is
+face sharing. `min_shared_ligands` selects the edge threshold for percolation;
+for example, `3` tests the face-sharing-or-stronger network. Periodic
+percolation is detected from inconsistent image translations around network
+cycles, independently along x, y, and z.
 
 ## Scattering workflow
 
@@ -225,6 +333,8 @@ Every calculator that exposes `ncore` uses the same meaning:
   when the calculation finishes.
 - Worker count is limited by available work. For example, four frames cannot
   use more than four workers even if `ncore=128`.
+- `backend="auto"` uses conservative, calculator-specific workload thresholds
+  because process startup can be slower than serial execution for short slices.
 
 On a 256-logical-CPU server, a sufficiently large multiprocessing calculation
 with `ncore=128` is restricted to 128 logical CPUs.
@@ -239,10 +349,19 @@ details are recorded in `result.attrs["execution"]`.
 
 ```bash
 python benchmarks/benchmark_rdf.py simulation.xyz --frames 128 --ncore 32
+python benchmarks/benchmark_structural.py simulation.xyz \
+  --center Be --ligand F --cutoff 2.35 --frames 64 --ncores 2 4 8 16 24
 ```
 
-The benchmark enforces a maximum test budget of 128 logical CPUs and verifies
-serial/multiprocessing numerical parity before reporting timings.
+Both benchmarks verify serial/multiprocessing numerical parity before reporting
+timings. The structural benchmark limits requested worker counts to 24. To
+regress the migration directly against a local copy of the original helper:
+
+```bash
+python experiments/compare_original_structural.py simulation.xyz \
+  /path/to/MolecularDynamicsTools.py --center Be --ligand F --cutoff 2.35 \
+  --second-center Li --second-cutoff 2.75 --frames 4
+```
 
 ## Repository layout
 

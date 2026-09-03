@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import re
-from typing import TYPE_CHECKING, Mapping
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
-from numpy.typing import ArrayLike, NDArray
 import pandas as pd
 import periodictable as pt
+from numpy.typing import ArrayLike, NDArray
 from scipy.constants import Avogadro
 
 if TYPE_CHECKING:

@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+import multiprocessing
+import os
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import combinations_with_replacement
-import multiprocessing
 from numbers import Integral
-import os
-from typing import Callable, Iterable, Literal, Mapping, Sequence
+from typing import Literal
 
 import freud
 import numpy as np
-from numpy.typing import NDArray
 import pandas as pd
+from numpy.typing import NDArray
 
 from ._execution import (
     Backend,
@@ -22,26 +23,13 @@ from ._execution import (
     plan_execution,
     restricted_cpu_affinity,
 )
+from ._geometry import freud_box as _freud_box
+from ._geometry import safe_periodic_radius
 from .trajectory import Trajectory
 
 Pair = tuple[str, str]
 ModeSpec = int | Literal["auto"] | Mapping[Pair, int]
 _WORKER_TRAJECTORY: Trajectory | None = None
-
-
-def _freud_box(dimensions: Sequence[float]) -> freud.Box:
-    lengths = np.asarray(dimensions[:3], dtype=float)
-    angles = np.asarray(dimensions[3:6], dtype=float)
-    if np.allclose(angles, 90.0, atol=1e-7):
-        return freud.Box(Lx=lengths[0], Ly=lengths[1], Lz=lengths[2])
-    return freud.Box.from_box_lengths_and_angles(
-        lengths[0],
-        lengths[1],
-        lengths[2],
-        np.radians(angles[0]),
-        np.radians(angles[1]),
-        np.radians(angles[2]),
-    )
 
 
 def _normalize_pairs(
@@ -81,25 +69,36 @@ def _resolve_radius_range(
     r_min = float(r_min)
     if not np.isfinite(r_min) or r_min < 0:
         raise ValueError("r_min must be finite and nonnegative")
-    if r_max is not None:
-        resolved = float(r_max)
-        if not np.isfinite(resolved) or resolved <= r_min:
-            raise ValueError("r_max must be finite and greater than r_min")
-        return r_min, resolved
-
     known = [trajectory.source.frames[index].dimensions for index in frame_indices]
     if all(dimensions is not None for dimensions in known):
-        safe_max = min(
-            0.5 * min(dimensions[:3])
-            for dimensions in known
+        safe_by_frame = [
+            (trajectory.source.frames[index].source_index, safe_periodic_radius(dimensions))
+            for index, dimensions in zip(frame_indices, known, strict=True)
             if dimensions is not None
-        )
+        ]
     else:
-        safe_max = min(
-            0.5 * min(frame.dimensions[:3])
+        safe_by_frame = [
+            (frame.source_index, safe_periodic_radius(frame.dimensions))
             for frame in trajectory.iter_frames(frame_indices)
+        ]
+    limiting_frame, safe_max = min(safe_by_frame, key=lambda item: item[1])
+    if r_max is None:
+        if safe_max <= r_min:
+            raise ValueError(
+                f"r_min={r_min:g} leaves no usable range below the safe periodic "
+                f"radius {safe_max:g} at source frame {limiting_frame}"
+            )
+        return r_min, safe_max
+
+    resolved = float(r_max)
+    if not np.isfinite(resolved) or resolved <= r_min:
+        raise ValueError("r_max must be finite and greater than r_min")
+    if resolved > safe_max:
+        raise ValueError(
+            f"r_max={resolved:g} exceeds the safe periodic radius {safe_max:g} "
+            f"at source frame {limiting_frame}; reduce r_range[1] or use None"
         )
-    return r_min, np.nextafter(float(safe_max), 0.0)
+    return r_min, resolved
 
 
 def _resolve_bin_edges(
@@ -288,7 +287,7 @@ def _accumulate_rdf_chunk(
     r_min, r_max = float(bin_edges[0]), float(bin_edges[-1])
 
     for frame in trajectory.iter_frames(frame_indices):
-        safe_max = np.nextafter(0.5 * min(frame.dimensions[:3]), 0.0)
+        safe_max = safe_periodic_radius(frame.dimensions)
         if r_max > safe_max:
             raise ValueError(
                 f"r_max={r_max:g} exceeds the safe periodic cutoff "
@@ -369,7 +368,7 @@ def _accumulate_spectral_chunk(
     cosine_normalization = np.sqrt(2.0 / interval)
 
     for frame in trajectory.iter_frames(frame_indices):
-        safe_max = np.nextafter(0.5 * min(frame.dimensions[:3]), 0.0)
+        safe_max = safe_periodic_radius(frame.dimensions)
         if r_max > safe_max:
             raise ValueError(
                 f"r_max={r_max:g} exceeds the safe periodic cutoff "

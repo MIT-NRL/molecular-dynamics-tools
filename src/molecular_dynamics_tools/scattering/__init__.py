@@ -7,8 +7,8 @@ from .calculation import (
     compute_partial_structure_factors,
     compute_scattering,
 )
-from .plotting import plot_structure_factor, plot_weighted_rdf
 from .composition import IsotopeMixture, ScatteringComposition
+from .plotting import plot_structure_factor, plot_weighted_rdf
 from .weights import (
     Pair,
     ScatteringProbe,

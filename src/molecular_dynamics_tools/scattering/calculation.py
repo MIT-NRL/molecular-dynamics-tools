@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Iterable, Mapping, Sequence
 
 import numpy as np
-from numpy.typing import ArrayLike
 import pandas as pd
+from numpy.typing import ArrayLike
 
 from molecular_dynamics_tools.transforms import (
     IntegrationMethod,
@@ -25,7 +25,6 @@ from .weights import (
     pair_label,
     unique_pairs,
 )
-
 
 CompositionInput = ScatteringComposition | Mapping[str, float] | str | None
 

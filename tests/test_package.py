@@ -1,7 +1,7 @@
 """Smoke tests for the public package surface."""
 
-from importlib import import_module
 import unittest
+from importlib import import_module
 
 import molecular_dynamics_tools as mdt
 
@@ -20,6 +20,11 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(callable(mdt.plot_structure_factor))
         self.assertTrue(callable(mdt.plot_weighted_rdf))
         self.assertTrue(callable(mdt.ScatteringComposition))
+        self.assertTrue(callable(mdt.compute_coordination))
+        self.assertTrue(callable(mdt.compute_rad_coordination))
+        self.assertTrue(callable(mdt.compute_bond_angles))
+        self.assertTrue(callable(mdt.compute_cutoff_clusters))
+        self.assertTrue(callable(mdt.analyze_bridging_clusters))
 
     def test_scaffold_modules_import(self) -> None:
         modules = (

@@ -4,10 +4,24 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-
 __version__ = "0.1.0"
 
 if TYPE_CHECKING:
+    from .angles import AngleDefinition, compute_bond_angles
+    from .clusters import (
+        BridgingClusterResult,
+        CutoffClusterDefinition,
+        analyze_bridging_clusters,
+        analyze_polyhedra,
+        compute_cutoff_clusters,
+        compute_pair_clusters,
+    )
+    from .coordination import (
+        CoordinationDefinition,
+        compute_coordination,
+        compute_rad_coordination,
+        summarize_coordination,
+    )
     from .rdf import compute_rdfs, compute_spectral_rdfs
     from .scattering import (
         ProbeScatteringResult,
@@ -23,6 +37,51 @@ if TYPE_CHECKING:
 
 
 _LAZY_EXPORTS = {
+    "AngleDefinition": ("molecular_dynamics_tools.angles", "AngleDefinition"),
+    "compute_bond_angles": (
+        "molecular_dynamics_tools.angles",
+        "compute_bond_angles",
+    ),
+    "CoordinationDefinition": (
+        "molecular_dynamics_tools.coordination",
+        "CoordinationDefinition",
+    ),
+    "compute_coordination": (
+        "molecular_dynamics_tools.coordination",
+        "compute_coordination",
+    ),
+    "compute_rad_coordination": (
+        "molecular_dynamics_tools.coordination",
+        "compute_rad_coordination",
+    ),
+    "summarize_coordination": (
+        "molecular_dynamics_tools.coordination",
+        "summarize_coordination",
+    ),
+    "CutoffClusterDefinition": (
+        "molecular_dynamics_tools.clusters",
+        "CutoffClusterDefinition",
+    ),
+    "compute_cutoff_clusters": (
+        "molecular_dynamics_tools.clusters",
+        "compute_cutoff_clusters",
+    ),
+    "compute_pair_clusters": (
+        "molecular_dynamics_tools.clusters",
+        "compute_pair_clusters",
+    ),
+    "BridgingClusterResult": (
+        "molecular_dynamics_tools.clusters",
+        "BridgingClusterResult",
+    ),
+    "analyze_bridging_clusters": (
+        "molecular_dynamics_tools.clusters",
+        "analyze_bridging_clusters",
+    ),
+    "analyze_polyhedra": (
+        "molecular_dynamics_tools.clusters",
+        "analyze_polyhedra",
+    ),
     "compute_rdfs": ("molecular_dynamics_tools.rdf", "compute_rdfs"),
     "compute_spectral_rdfs": (
         "molecular_dynamics_tools.rdf", "compute_spectral_rdfs"
@@ -81,6 +140,10 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "AngleDefinition",
+    "BridgingClusterResult",
+    "CoordinationDefinition",
+    "CutoffClusterDefinition",
     "Trajectory",
     "TrajectoryFrame",
     "__version__",
@@ -88,6 +151,11 @@ __all__ = [
     "ScatteringComposition",
     "ScatteringResult",
     "compute_partial_structure_factors",
+    "compute_bond_angles",
+    "compute_coordination",
+    "compute_cutoff_clusters",
+    "compute_pair_clusters",
+    "compute_rad_coordination",
     "compute_rdfs",
     "compute_scattering",
     "plot_structure_factor",
@@ -95,4 +163,7 @@ __all__ = [
     "compute_scattering_weights",
     "compute_spectral_rdfs",
     "load_trajectory",
+    "analyze_bridging_clusters",
+    "analyze_polyhedra",
+    "summarize_coordination",
 ]

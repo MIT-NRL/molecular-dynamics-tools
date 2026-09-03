@@ -17,10 +17,22 @@ here as the package is developed.
 - Add streaming `compute_spectral_rdfs` with global or pair-specific fixed modes.
 - Add pilot-elbow automatic spectral modes with reusable pilot coefficients and diagnostics.
 - Support mutually exclusive RDF `bins` and exact radial `step` controls.
+- Validate explicit RDF radii against the true triclinic nearest-face limit
+  before starting workers.
 - Standardize `ncore` as the total logical-CPU budget.
 - Enforce that budget across freud and BLAS thread pools to prevent nested oversubscription.
 - Transfer an indexed Universe once per worker without coordinate precaching.
+- Add one reusable streaming frame executor for coordination, angle, and
+  clustering calculations.
+- Add cutoff and directed/mutual RAD coordination distributions and summaries.
+- Add multi-definition bond-angle probability densities.
+- Add direct cutoff-bond clustering with atom- or component-based normalization.
+- Add a unified bridging-ligand analysis for corner, edge, face, and connected
+  polyhedron clusters, finite-cluster moments, and periodic percolation.
+- Add workload-aware automatic backend selection based on bounded local timing.
+- Add trajectory context-manager and explicit reader-close support.
 - Add a bounded real-trajectory RDF benchmark with numerical parity checks.
+- Add bounded structural backend benchmarking and original-helper regression tools.
 - Store composition, pair, and mean number-density metadata on RDF results.
 - Add `ScatteringComposition` with isotope mixtures and ionic X-ray form factors.
 - Add Faber–Ziman and Ashcroft–Langreth partial structure factors and weights.

@@ -9,7 +9,6 @@ from numpy.typing import ArrayLike, NDArray
 from scipy.integrate import simpson
 from scipy.signal import ZoomFFT
 
-
 TransformBackend = Literal["zoomfft", "direct"]
 IntegrationMethod = Literal["uniform", "simpson"]
 

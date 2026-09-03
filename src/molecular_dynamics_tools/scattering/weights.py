@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Literal
+from collections.abc import Iterable
+from typing import Literal
 
 import numpy as np
-from numpy.typing import ArrayLike
 import pandas as pd
+from numpy.typing import ArrayLike
 
 from .composition import ScatteringComposition
-
 
 Pair = tuple[str, str]
 ScatteringProbe = Literal["neutron", "xray"]

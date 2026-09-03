@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-import re
-from typing import Any, Iterator, Sequence
+from typing import Any
 
 import MDAnalysis as mda
+import numpy as np
 from MDAnalysis.coordinates.XYZ import XYZReader
 from MDAnalysis.exceptions import NoDataError
 from MDAnalysis.lib import util
-import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 _LATTICE_RE = re.compile(r'Lattice="([^"]+)"')
@@ -58,6 +59,17 @@ class Trajectory:
 
     def __len__(self) -> int:
         return len(self.source.frames)
+
+    def __enter__(self) -> Trajectory:
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Close the underlying MDAnalysis trajectory reader."""
+
+        self.universe.trajectory.close()
 
     @property
     def n_atoms(self) -> int:

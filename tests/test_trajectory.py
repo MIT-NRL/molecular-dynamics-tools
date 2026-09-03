@@ -1,8 +1,9 @@
 """Tests for MDAnalysis-backed trajectory loading."""
 
-from pathlib import Path
+import gc
 import tempfile
 import unittest
+from pathlib import Path
 
 import MDAnalysis as mda
 import numpy as np
@@ -35,6 +36,7 @@ class TrajectoryTests(unittest.TestCase):
         write_synthetic_xyz(self.path)
 
     def tearDown(self) -> None:
+        gc.collect()
         self.temp_directory.cleanup()
 
     def test_bounded_source_slice_indexes_only_requested_frames(self) -> None:

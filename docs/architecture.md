@@ -47,8 +47,9 @@ serial-versus-multiprocessing plan.
 - `ncore` is a hard total logical-CPU budget.
 - Serial: one process, `ncore` native threads.
 - Multiprocessing: at most `ncore` processes, one native thread each.
-- `backend="auto"` chooses multiprocessing when both the core budget and
-  selected frame count exceed one.
+- `backend="auto"` chooses multiprocessing only when the core budget, selected
+  frame count, and calculator-specific workload estimate justify process
+  startup. Explicit `serial` and `multiprocessing` choices bypass this estimate.
 - Worker processes receive the indexed, pickleable Universe once in their
   initializer, not coordinates.
 - Linux affinity is applied temporarily and restored after each call.
@@ -113,38 +114,45 @@ SeanFunctions.
 
 ### `coordination`
 
-Planned cutoff and relative-angular-distance coordination calculations:
+Implemented cutoff and relative-angular-distance coordination calculations:
 
 - `compute_coordination`
 - `compute_rad_coordination`
 - `summarize_coordination`
 
+Multiple definitions share one streamed pass through each frame chunk. RAD
+supports directed shells and mutual (`RAD-and`) bonds.
+
 ### `angles`
 
-Planned bond-angle distributions:
+Implemented bond-angle distributions:
 
 - `compute_bond_angles`
 
+Equivalent outer atoms are deduplicated for symmetric bond definitions.
+
 ### `clusters.core`
 
-Planned internal graph, connected-component, histogram, and periodic-wrapping
-kernels shared by pair and polyhedron clustering.
+Implemented union-find, connected-component, and periodic-wrapping kernels
+shared by direct-cutoff and bridging-ligand clustering.
 
 ### `clusters.pairs`
 
-Planned distance-defined atomic cluster distributions:
+Implemented direct distance-cutoff cluster distributions:
 
-- `compute_pair_clusters`
+- `compute_cutoff_clusters` (`compute_pair_clusters` is an equivalent name)
 
 ### `clusters.polyhedra`
 
-Planned shared-ligand networks, corner/edge/face sharing, and periodic
+Implemented bridging-ligand networks, corner/edge/face sharing, and periodic
 percolation:
 
-- `analyze_polyhedra`
+- `analyze_bridging_clusters` (`analyze_polyhedra` is an equivalent name)
 
-Sharing and percolation should be evaluated from the same per-frame network so
-neighbor construction is not repeated.
+Sharing and percolation are evaluated from the same per-frame network, so
+center-ligand neighbor construction is not repeated. The result groups sharing
+distributions, cluster distributions, per-frame wrapping data, finite-cluster
+moments, and aggregate percolation statistics.
 
 ### `environments`
 

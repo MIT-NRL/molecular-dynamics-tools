@@ -14,7 +14,6 @@ from molecular_dynamics_tools import (
 )
 from molecular_dynamics_tools.transforms import spherical_bessel_transform
 
-
 PAIRS = (("F", "F"), ("F", "Li"), ("Li", "Li"))
 
 

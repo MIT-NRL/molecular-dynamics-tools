@@ -208,51 +208,71 @@ otherwise have the same generated column name and need explicit labels.
 
 ## Cluster workflow
 
-The cluster API deliberately separates two graph definitions.
+Clustering is grouped under the `mdt.clustering` namespace. Both calculations
+use the same connected-component machinery but differ in how graph connections
+are defined.
 
-`compute_cutoff_clusters` builds direct atomic bonds from distance cutoffs:
+`compute_by_distance` connects one species to itself or two species to each
+other using a distance cutoff:
 
 ```python
-cutoff_clusters = mdt.compute_cutoff_clusters(
+distance = mdt.clustering.compute_by_distance(
     trajectory,
-    [("Be", "F", 2.35), ("Cs", "F", 3.50)],
-    normalize="atom1",
-    include_unbonded=False,
+    species=("Be", "F"),
+    cutoff=2.35,
+    count_species="Be",
+    include_isolated=False,
     ncore=24,
 )
+
+distance.cluster_distribution
 ```
 
-With `normalize="atom1"`, cluster size is the number of first-species atoms
-and the distribution is sampled once per first-species atom. With
-`normalize="total"`, size is the total number of selected atoms and the
-distribution is sampled once per connected component.
+With `count_species="Be"`, cluster size is the number of Be atoms and the
+distribution is sampled once per Be atom. Without `count_species`, cluster
+size is the total number of selected atoms and the distribution is sampled
+once per connected component. Passing a single species, such as
+`species="Li"`, constructs a same-species distance graph and excludes
+self-pairs. `r_min=0.0` means no positive lower distance cutoff; it does not
+make an atom its own neighbor. Set `r_min` to exclude shorter contacts; it must
+satisfy `0 <= r_min < cutoff`. By default, size-one components are omitted;
+set `include_isolated=True` to retain them.
 
-`analyze_bridging_clusters` constructs polyhedra from center-ligand bonds and
-connects centers through shared ligands. The center-ligand neighbor graph is
-built once per frame and reused for all sharing and percolation results:
+`compute_by_shared_neighbors` projects a center-neighbor distance graph onto
+the centers. The graph is built once per frame and reused for the requested
+category distributions—all four by default—and percolation:
 
 ```python
-network = mdt.analyze_bridging_clusters(
+network = mdt.clustering.compute_by_shared_neighbors(
     trajectory,
-    center="Be",
-    ligand="F",
-    r_center_ligand=2.35,
-    min_shared_ligands=1,
+    centers="Be",
+    neighbors="F",
+    cutoff=2.35,
     ncore=24,
 )
 
-network.sharing_distribution              # shared-ligand count and type
-network.cluster_distribution              # corner/edge/face/connected clusters
+network.sharing_distribution              # shared-neighbor count and type
+network.cluster_distribution              # connected/corner/edge/face clusters
 network.frame_summary                     # links and wrapping per frame
 network.percolation_cluster_distribution  # total and finite component counts
 network.percolation_summary               # means, deviations, wrap probabilities
 ```
 
-One shared ligand is corner sharing, two is edge sharing, and three or more is
-face sharing. `min_shared_ligands` selects the edge threshold for percolation;
-for example, `3` tests the face-sharing-or-stronger network. Periodic
+All four connection outputs are calculated by default; `connections=` can
+request a subset. `connected` is the union of all center pairs sharing at
+least one neighbor; one shared neighbor is corner sharing, two is edge sharing,
+and three or more is face sharing. `min_shared_neighbors` is the minimum
+shared-neighbor count for a percolation edge, independently of `connections`;
+`3` retains links sharing three or more neighbors. Periodic
 percolation is detected from inconsistent image translations around network
-cycles, independently along x, y, and z.
+cycles, independently along x, y, and z. `include_isolated=False` omits
+size-one center components from cluster and percolation component tables.
+
+With `r_min=0.0`, matching cutoff and isolation settings, and `connections`
+including `"connected"`, two-species distance clustering with `count_species`
+set to the center is numerically equivalent to the `connected` shared-neighbor
+distribution. The shared-neighbor calculation adds categorized networks and
+percolation details.
 
 ## Scattering workflow
 
@@ -342,8 +362,9 @@ with `ncore=128` is restricted to 128 logical CPUs.
 Before spawning, the parent builds the MDAnalysis reader random-access index
 once. Each worker receives the indexed Universe once through its initializer and
 then streams a contiguous frame chunk through its own file handle. No
-parent-process coordinate cache is constructed or transferred. Execution
-details are recorded in `result.attrs["execution"]`.
+parent-process coordinate cache is constructed or transferred. DataFrame
+calculators record execution details in `result.attrs["execution"]`; named
+results record them in `result.metadata["execution"]`.
 
 ## Benchmark
 

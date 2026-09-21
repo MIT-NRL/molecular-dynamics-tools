@@ -13,7 +13,7 @@ import pandas as pd
 
 import molecular_dynamics_tools as mdt
 
-Method = Callable[[str, int], pd.DataFrame | mdt.BridgingClusterResult]
+Method = Callable[[str, int], pd.DataFrame | mdt.clustering.ClusterResult]
 
 
 def _time(function: Callable[[], Any]) -> tuple[Any, float]:
@@ -23,18 +23,23 @@ def _time(function: Callable[[], Any]) -> tuple[Any, float]:
 
 
 def _assert_equivalent(
-    candidate: pd.DataFrame | mdt.BridgingClusterResult,
-    reference: pd.DataFrame | mdt.BridgingClusterResult,
+    candidate: pd.DataFrame | mdt.clustering.ClusterResult,
+    reference: pd.DataFrame | mdt.clustering.ClusterResult,
 ) -> None:
-    if isinstance(reference, mdt.BridgingClusterResult):
-        assert isinstance(candidate, mdt.BridgingClusterResult)
-        for attribute in (
-            "sharing_distribution",
-            "cluster_distribution",
-            "frame_summary",
-            "percolation_cluster_distribution",
-            "percolation_summary",
-        ):
+    if isinstance(reference, mdt.clustering.ClusterResult):
+        assert isinstance(candidate, mdt.clustering.ClusterResult)
+        attributes = ["cluster_distribution"]
+        if isinstance(reference, mdt.clustering.SharedNeighborClusterResult):
+            assert isinstance(candidate, mdt.clustering.SharedNeighborClusterResult)
+            attributes.extend(
+                [
+                    "sharing_distribution",
+                    "frame_summary",
+                    "percolation_cluster_distribution",
+                    "percolation_summary",
+                ]
+            )
+        for attribute in attributes:
             left = getattr(candidate, attribute)
             right = getattr(reference, attribute)
             pd.testing.assert_frame_equal(left, right, check_exact=False, rtol=1e-13)
@@ -63,11 +68,23 @@ def _methods(
             backend=backend,
             ncore=ncore,
         ),
-        "cutoff_clusters": lambda backend, ncore: mdt.compute_cutoff_clusters(
-            trajectory, [(center, ligand, cutoff)], backend=backend, ncore=ncore
+        "distance_clusters": lambda backend, ncore: mdt.clustering.compute_by_distance(
+            trajectory,
+            species=(center, ligand),
+            cutoff=cutoff,
+            count_species=center,
+            backend=backend,
+            ncore=ncore,
         ),
-        "bridging_clusters": lambda backend, ncore: mdt.analyze_bridging_clusters(
-            trajectory, center, ligand, cutoff, backend=backend, ncore=ncore
+        "shared_neighbor_clusters": (
+            lambda backend, ncore: mdt.clustering.compute_by_shared_neighbors(
+                trajectory,
+                centers=center,
+                neighbors=ligand,
+                cutoff=cutoff,
+                backend=backend,
+                ncore=ncore,
+            )
         ),
     }
 
@@ -90,8 +107,20 @@ def main() -> None:
     parser.add_argument(
         "--methods",
         nargs="+",
-        choices=("coordination", "rad", "angles", "cutoff_clusters", "bridging_clusters"),
-        default=("coordination", "rad", "angles", "cutoff_clusters", "bridging_clusters"),
+        choices=(
+            "coordination",
+            "rad",
+            "angles",
+            "distance_clusters",
+            "shared_neighbor_clusters",
+        ),
+        default=(
+            "coordination",
+            "rad",
+            "angles",
+            "distance_clusters",
+            "shared_neighbor_clusters",
+        ),
     )
     parser.add_argument("--format", help="Explicit MDAnalysis coordinate format")
     parser.add_argument("--atom-attribute", default="auto")

@@ -5,12 +5,12 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from molecular_dynamics_tools import (
-    analyze_bridging_clusters,
+    clustering,
     compute_bond_angles,
     compute_coordination,
-    compute_cutoff_clusters,
     compute_rad_coordination,
     load_trajectory,
     summarize_coordination,
@@ -62,6 +62,24 @@ def write_wrapping_xyz(path: Path) -> None:
     )
 
 
+def write_terminal_network_xyz(path: Path) -> None:
+    path.write_text(
+        "\n".join(
+            [
+                "5",
+                'Lattice="20 0 0 0 20 0 0 0 20" Properties=species:S:1:pos:R:3',
+                "C 0 0 0",
+                "C 3 0 0",
+                "C 8 0 0",
+                "L 1.5 0 0",
+                "L 8.5 0 0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 class StructuralAnalysisTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -106,11 +124,15 @@ class StructuralAnalysisTests(unittest.TestCase):
                 ncore=4,
                 backend=backend,
             ),
-            lambda backend: compute_cutoff_clusters(
-                self.trajectory,
-                [("C", "L", 1.7), ("C", "C", 3.1)],
-                ncore=4,
-                backend=backend,
+            lambda backend: (
+                clustering.compute_by_distance(
+                    self.trajectory,
+                    species=("C", "L"),
+                    cutoff=1.7,
+                    count_species="C",
+                    ncore=4,
+                    backend=backend,
+                ).cluster_distribution
             ),
         )
         for calculation in calculations:
@@ -121,28 +143,35 @@ class StructuralAnalysisTests(unittest.TestCase):
                 self.assertEqual(parallel.attrs["execution"]["worker_count"], 4)
                 self.assertFalse(parallel.attrs["execution"]["coordinate_precache"])
 
-    def test_cutoff_and_bridging_strategies_are_distinct_and_clear(self) -> None:
-        cutoff = compute_cutoff_clusters(
+    def test_distance_and_shared_neighbor_connected_distributions_match(self) -> None:
+        distance = clustering.compute_by_distance(
             self.trajectory,
-            [("C", "L", 1.7)],
+            species=("C", "L"),
+            cutoff=1.7,
+            count_species="C",
             backend="serial",
         )
-        self.assertAlmostEqual(cutoff.loc[cutoff["cluster_size"] == 3, "C-L"].iloc[0], 1.0)
-        self.assertEqual(cutoff.attrs["method"], "cutoff")
+        self.assertAlmostEqual(
+            distance.cluster_distribution.loc[
+                distance.cluster_distribution["cluster_size"] == 3, "probability"
+            ].iloc[0],
+            1.0,
+        )
+        self.assertEqual(distance.metadata["method"], "distance")
 
-        serial = analyze_bridging_clusters(
+        serial = clustering.compute_by_shared_neighbors(
             self.trajectory,
-            "C",
-            "L",
-            1.7,
+            centers="C",
+            neighbors="L",
+            cutoff=1.7,
             backend="serial",
             ncore=4,
         )
-        parallel = analyze_bridging_clusters(
+        parallel = clustering.compute_by_shared_neighbors(
             self.trajectory,
-            "C",
-            "L",
-            1.7,
+            centers="C",
+            neighbors="L",
+            cutoff=1.7,
             backend="multiprocessing",
             ncore=4,
         )
@@ -154,9 +183,22 @@ class StructuralAnalysisTests(unittest.TestCase):
             parallel.percolation_cluster_distribution.to_numpy(),
             serial.percolation_cluster_distribution.to_numpy(),
         )
+        self.assertEqual(serial.sharing_distribution["sharing_type"].tolist(), ["corner", "edge"])
         self.assertEqual(
-            serial.sharing_distribution["sharing_type"].tolist(), ["corner", "edge"]
+            serial.sharing_distribution.columns.tolist(),
+            ["shared_neighbors", "probability", "sharing_type"],
         )
+        self.assertEqual(
+            serial.cluster_distribution.columns.tolist(),
+            ["cluster_size", "connected", "corner", "edge", "face"],
+        )
+        comparable = pd.merge(
+            distance.cluster_distribution[["cluster_size", "probability"]],
+            serial.cluster_distribution[["cluster_size", "connected"]],
+            on="cluster_size",
+            how="outer",
+        ).fillna(0.0)
+        np.testing.assert_allclose(comparable["probability"], comparable["connected"])
         self.assertTrue(np.all(serial.frame_summary["corner_links"] == 1))
         self.assertTrue(np.all(serial.frame_summary["edge_links"] == 1))
         self.assertTrue(np.all(serial.frame_summary["face_links"] == 0))
@@ -169,16 +211,44 @@ class StructuralAnalysisTests(unittest.TestCase):
         path = Path(self.temporary_directory.name) / "wrapping.xyz"
         write_wrapping_xyz(path)
         trajectory = load_trajectory(path)
-        result = analyze_bridging_clusters(
+        result = clustering.compute_by_shared_neighbors(
             trajectory,
-            "C",
-            "L",
-            4.5,
+            centers="C",
+            neighbors="L",
+            cutoff=4.5,
             backend="serial",
         )
         self.assertTrue(result.frame_summary.loc[0, "wrap_x"])
         self.assertTrue(result.frame_summary.loc[0, "wrap_any"])
         self.assertEqual(result.frame_summary.loc[0, "percolation_strength"], 1.0)
+        trajectory.close()
+
+    def test_distance_shared_neighbor_equivalence_includes_terminal_centers(self) -> None:
+        path = Path(self.temporary_directory.name) / "terminal.xyz"
+        write_terminal_network_xyz(path)
+        trajectory = load_trajectory(path)
+        for include_isolated in (False, True):
+            with self.subTest(include_isolated=include_isolated):
+                distance = clustering.compute_by_distance(
+                    trajectory,
+                    species=("C", "L"),
+                    cutoff=1.7,
+                    count_species="C",
+                    include_isolated=include_isolated,
+                    backend="serial",
+                )
+                shared = clustering.compute_by_shared_neighbors(
+                    trajectory,
+                    centers="C",
+                    neighbors="L",
+                    cutoff=1.7,
+                    include_isolated=include_isolated,
+                    backend="serial",
+                )
+                np.testing.assert_allclose(
+                    distance.cluster_distribution["probability"],
+                    shared.cluster_distribution["connected"],
+                )
         trajectory.close()
 
 

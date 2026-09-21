@@ -26,9 +26,11 @@ here as the package is developed.
   clustering calculations.
 - Add cutoff and directed/mutual RAD coordination distributions and summaries.
 - Add multi-definition bond-angle probability densities.
-- Add direct cutoff-bond clustering with atom- or component-based normalization.
-- Add a unified bridging-ligand analysis for corner, edge, face, and connected
-  polyhedron clusters, finite-cluster moments, and periodic percolation.
+- Add `mdt.clustering.compute_by_distance` for one- or two-species distance
+  connectivity with total-atom or selected-species cluster sizes.
+- Add `mdt.clustering.compute_by_shared_neighbors` with connected, corner,
+  edge, and face networks by default, plus finite-cluster moments and periodic
+  percolation.
 - Add workload-aware automatic backend selection based on bounded local timing.
 - Add trajectory context-manager and explicit reader-close support.
 - Add a bounded real-trajectory RDF benchmark with numerical parity checks.

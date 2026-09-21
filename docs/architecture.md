@@ -131,26 +131,25 @@ Implemented bond-angle distributions:
 
 Equivalent outer atoms are deduplicated for symmetric bond definitions.
 
-### `clusters.core`
+### `clustering`
+
+Public clustering calculations are grouped under `mdt.clustering`:
+
+- `compute_by_distance`
+- `compute_by_shared_neighbors`
+
+Both return named result objects with a `cluster_distribution` table and
+metadata. Shared-neighbor results additionally expose sharing, per-frame, and
+percolation tables. All shared-neighbor connections are categorized as
+connected, corner, edge, and face by default.
+
+### Internal cluster graph implementation
 
 Implemented union-find, connected-component, and periodic-wrapping kernels
-shared by direct-cutoff and bridging-ligand clustering.
-
-### `clusters.pairs`
-
-Implemented direct distance-cutoff cluster distributions:
-
-- `compute_cutoff_clusters` (`compute_pair_clusters` is an equivalent name)
-
-### `clusters.polyhedra`
-
-Implemented bridging-ligand networks, corner/edge/face sharing, and periodic
-percolation:
-
-- `analyze_bridging_clusters` (`analyze_polyhedra` is an equivalent name)
+shared by distance and shared-neighbor clustering.
 
 Sharing and percolation are evaluated from the same per-frame network, so
-center-ligand neighbor construction is not repeated. The result groups sharing
+center-neighbor construction is not repeated. The result groups sharing
 distributions, cluster distributions, per-frame wrapping data, finite-cluster
 moments, and aggregate percolation statistics.
 

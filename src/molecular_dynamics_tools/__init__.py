@@ -7,15 +7,8 @@ from typing import TYPE_CHECKING, Any
 __version__ = "0.1.0"
 
 if TYPE_CHECKING:
+    from . import clustering
     from .angles import AngleDefinition, compute_bond_angles
-    from .clusters import (
-        BridgingClusterResult,
-        CutoffClusterDefinition,
-        analyze_bridging_clusters,
-        analyze_polyhedra,
-        compute_cutoff_clusters,
-        compute_pair_clusters,
-    )
     from .coordination import (
         CoordinationDefinition,
         compute_coordination,
@@ -64,34 +57,8 @@ _LAZY_EXPORTS = {
         "molecular_dynamics_tools.coordination",
         "summarize_coordination",
     ),
-    "CutoffClusterDefinition": (
-        "molecular_dynamics_tools.clusters",
-        "CutoffClusterDefinition",
-    ),
-    "compute_cutoff_clusters": (
-        "molecular_dynamics_tools.clusters",
-        "compute_cutoff_clusters",
-    ),
-    "compute_pair_clusters": (
-        "molecular_dynamics_tools.clusters",
-        "compute_pair_clusters",
-    ),
-    "BridgingClusterResult": (
-        "molecular_dynamics_tools.clusters",
-        "BridgingClusterResult",
-    ),
-    "analyze_bridging_clusters": (
-        "molecular_dynamics_tools.clusters",
-        "analyze_bridging_clusters",
-    ),
-    "analyze_polyhedra": (
-        "molecular_dynamics_tools.clusters",
-        "analyze_polyhedra",
-    ),
     "compute_rdfs": ("molecular_dynamics_tools.rdf", "compute_rdfs"),
-    "compute_spectral_rdfs": (
-        "molecular_dynamics_tools.rdf", "compute_spectral_rdfs"
-    ),
+    "compute_spectral_rdfs": ("molecular_dynamics_tools.rdf", "compute_spectral_rdfs"),
     "compute_partial_structure_factors": (
         "molecular_dynamics_tools.scattering",
         "compute_partial_structure_factors",
@@ -126,18 +93,32 @@ _LAZY_EXPORTS = {
     ),
     "load_trajectory": ("molecular_dynamics_tools.trajectory", "load_trajectory"),
     "normalize_xyz_species_order": (
-        "molecular_dynamics_tools.trajectory", "normalize_xyz_species_order"
+        "molecular_dynamics_tools.trajectory",
+        "normalize_xyz_species_order",
     ),
     "xyz_has_variable_species_order": (
-        "molecular_dynamics_tools.trajectory", "xyz_has_variable_species_order"
+        "molecular_dynamics_tools.trajectory",
+        "xyz_has_variable_species_order",
     ),
     "Trajectory": ("molecular_dynamics_tools.trajectory", "Trajectory"),
     "TrajectoryFrame": ("molecular_dynamics_tools.trajectory", "TrajectoryFrame"),
 }
 
+_LAZY_MODULES = {
+    "clustering": "molecular_dynamics_tools.clustering",
+}
+
 
 def __getattr__(name: str) -> Any:
     """Load scientific dependencies only when their public API is requested."""
+
+    module_name = _LAZY_MODULES.get(name)
+    if module_name is not None:
+        from importlib import import_module
+
+        value = import_module(module_name)
+        globals()[name] = value
+        return value
 
     try:
         module_name, attribute = _LAZY_EXPORTS[name]
@@ -153,20 +134,17 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "AngleDefinition",
-    "BridgingClusterResult",
     "CoordinationDefinition",
-    "CutoffClusterDefinition",
     "Trajectory",
     "TrajectoryFrame",
     "__version__",
     "ProbeScatteringResult",
     "ScatteringComposition",
     "ScatteringResult",
+    "clustering",
     "compute_partial_structure_factors",
     "compute_bond_angles",
     "compute_coordination",
-    "compute_cutoff_clusters",
-    "compute_pair_clusters",
     "compute_rad_coordination",
     "compute_rdfs",
     "compute_scattering",
@@ -177,7 +155,5 @@ __all__ = [
     "load_trajectory",
     "normalize_xyz_species_order",
     "xyz_has_variable_species_order",
-    "analyze_bridging_clusters",
-    "analyze_polyhedra",
     "summarize_coordination",
 ]

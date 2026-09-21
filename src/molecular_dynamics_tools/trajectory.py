@@ -19,6 +19,7 @@ from numpy.typing import ArrayLike, NDArray
 
 _LATTICE_RE = re.compile(r'Lattice="([^"]+)"')
 _ORIGIN_RE = re.compile(r'Origin="([^"]+)"')
+_PROPERTIES_RE = re.compile(r'(?:^|\s)Properties=(?:"([^"]*)"|(\S+))')
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,7 +356,9 @@ def _read_xyz_species_codes(
             codes = np.empty((len(source_indices), len(labels)), dtype=np.uint8)
         if len(labels) != codes.shape[1] or set(labels) != set(species_labels):
             raise ValueError("XYZ frame species must be consistent across the selected frames")
-        row_codes = np.fromiter((lookup[label] for label in labels), dtype=np.uint8, count=len(labels))
+        row_codes = np.fromiter(
+            (lookup[label] for label in labels), dtype=np.uint8, count=len(labels)
+        )
         codes[row] = row_codes
         if reference_codes is None:
             reference_codes = row_codes.copy()
@@ -392,26 +395,79 @@ def _read_xyz_species_codes(
     return codes, species_labels
 
 
+def _xyz_property_columns(header_line: str) -> tuple[int, tuple[int, int, int]]:
+    """Return species and Cartesian-position field columns from an XYZ header.
+
+    Plain XYZ and the usual ``species:S:1:pos:R:3`` extended-XYZ layout use
+    the conventional ``species x y z`` columns.  Some writers instead emit
+    ``pos:R:3:species:S:1``; MDT canonicalizes those rows before MDAnalysis
+    reads them.
+    """
+
+    match = _PROPERTIES_RE.search(header_line)
+    if match is None:
+        return 0, (1, 2, 3)
+    specification = match.group(1) or match.group(2)
+    tokens = specification.split(":")
+    if len(tokens) % 3:
+        return 0, (1, 2, 3)
+    offset = 0
+    species_column: int | None = None
+    position_columns: tuple[int, int, int] | None = None
+    for index in range(0, len(tokens), 3):
+        name, _kind, width_text = tokens[index : index + 3]
+        try:
+            width = int(width_text)
+        except ValueError:
+            return 0, (1, 2, 3)
+        if name == "species" and width == 1:
+            species_column = offset
+        elif name in {"pos", "position", "positions"} and width == 3:
+            position_columns = (offset, offset + 1, offset + 2)
+        offset += width
+    if species_column is None or position_columns is None:
+        return 0, (1, 2, 3)
+    return species_column, position_columns
+
+
+def _xyz_needs_column_normalization(filename: str | Path) -> bool:
+    """Whether an extended XYZ uses a nonstandard atom-row column order."""
+
+    with Path(filename).open("r", encoding="utf-8", errors="replace") as handle:
+        if not handle.readline():
+            raise ValueError("XYZ file is empty")
+        header_line = handle.readline()
+    if not header_line:
+        raise ValueError("Malformed XYZ file: missing first frame header")
+    species_column, position_columns = _xyz_property_columns(header_line)
+    return species_column != 0 or position_columns != (1, 2, 3)
+
+
 def _xyz_species_sequence_for_frame(
     filename: str | Path,
     frame_index: int,
     atom_count: int,
 ) -> list[str] | None:
-    """Read the ordered species labels for one XYZ frame."""
+    """Read ordered species labels for one XYZ frame, honoring Properties."""
 
-    frame_start = frame_index * (atom_count + 2) + 2
-    labels: list[str] = []
+    frame_start = frame_index * (atom_count + 2)
     with Path(filename).open("r", encoding="utf-8", errors="replace") as handle:
-        for line_index, line in enumerate(handle):
-            if line_index < frame_start:
-                continue
-            if line_index >= frame_start + atom_count:
-                break
-            fields = line.split(maxsplit=1)
-            if not fields:
+        for _ in range(frame_start):
+            if not handle.readline():
                 return None
-            labels.append(fields[0])
-    return labels if len(labels) == atom_count else None
+        if not handle.readline():
+            return None
+        header_line = handle.readline()
+        if not header_line:
+            return None
+        species_column, _ = _xyz_property_columns(header_line)
+        labels: list[str] = []
+        for _ in range(atom_count):
+            fields = handle.readline().split()
+            if len(fields) <= species_column:
+                return None
+            labels.append(fields[species_column])
+    return labels
 
 
 def xyz_has_variable_species_order(
@@ -456,19 +512,36 @@ def normalize_xyz_species_order(
             atom_count = int(handle.readline().strip())
         except ValueError as exc:
             raise ValueError("XYZ file does not begin with an atom count") from exc
-        if not handle.readline():
+        first_header = handle.readline()
+        if not first_header:
             raise ValueError("Malformed XYZ file: missing first frame header")
         first_lines = [handle.readline() for _ in range(atom_count)]
     if len(first_lines) != atom_count or any(line == "" for line in first_lines):
         raise ValueError("Malformed XYZ file: incomplete first atom block")
 
+    species_column, position_columns = _xyz_property_columns(first_header)
+    canonical_columns = species_column == 0 and position_columns == (1, 2, 3)
+
+    def canonical_atom_line(line: str, header_line: str) -> tuple[str, str]:
+        current_species_column, current_position_columns = _xyz_property_columns(header_line)
+        fields = line.split()
+        required_column = max(current_species_column, *current_position_columns)
+        if len(fields) <= required_column:
+            raise ValueError("Malformed XYZ file: incomplete atom row")
+        species = fields[current_species_column]
+        if (
+            canonical_columns
+            and current_species_column == 0
+            and current_position_columns == (1, 2, 3)
+        ):
+            return species, line
+        x, y, z = (fields[column] for column in current_position_columns)
+        return species, f"{species} {x} {y} {z}\n"
+
     species_order: list[str] = []
     species_rank: dict[str, int] = {}
     for line in first_lines:
-        fields = line.split(maxsplit=1)
-        if not fields:
-            raise ValueError("Malformed XYZ file: empty atom line")
-        species = fields[0]
+        species, _ = canonical_atom_line(line, first_header)
         if species not in species_rank:
             species_rank[species] = len(species_order)
             species_order.append(species)
@@ -478,9 +551,9 @@ def normalize_xyz_species_order(
         cache_dir.mkdir(parents=True, exist_ok=True)
         stat = source.stat()
         digest = hashlib.sha1(
-            f"{source.resolve()}|{stat.st_size}|{stat.st_mtime_ns}".encode("utf-8")
+            f"{source.resolve()}|{stat.st_size}|{stat.st_mtime_ns}".encode()
         ).hexdigest()[:12]
-        destination = cache_dir / f"{source.stem}_{digest}_species_ordered{source.suffix}"
+        destination = cache_dir / f"{source.stem}_{digest}_species_ordered_v2{source.suffix}"
     else:
         destination = Path(output_filename).expanduser()
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -506,14 +579,11 @@ def normalize_xyz_species_order(
                 raise ValueError("Malformed XYZ file: incomplete atom block")
             grouped: dict[str, list[str]] = {}
             for line in atom_lines:
-                fields = line.split(maxsplit=1)
-                if not fields:
-                    raise ValueError("Malformed XYZ file: empty atom line")
-                species = fields[0]
+                species, normalized_line = canonical_atom_line(line, header_line)
                 if species not in species_rank:
                     species_rank[species] = len(species_order)
                     species_order.append(species)
-                grouped.setdefault(species, []).append(line)
+                grouped.setdefault(species, []).append(normalized_line)
             fout.write(atom_count_line)
             fout.write(header_line)
             for species in species_order:
@@ -582,6 +652,7 @@ def load_trajectory(
             should_normalize = normalize_species_order is True
             if normalize_species_order == "auto":
                 should_normalize = xyz_has_variable_species_order(input_path)
+            should_normalize = should_normalize or _xyz_needs_column_normalization(input_path)
             if should_normalize:
                 load_path = Path(normalize_xyz_species_order(input_path))
                 normalized_xyz = True

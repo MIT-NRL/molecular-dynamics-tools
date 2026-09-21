@@ -91,6 +91,25 @@ class TrajectoryTests(unittest.TestCase):
         for left, right in zip(unshifted.iter_frames(), shifted.iter_frames()):
             np.testing.assert_allclose(right.positions, left.positions + 5.0)
 
+    def test_pos_first_extended_xyz_is_canonicalized_before_loading(self) -> None:
+        path = Path(self.temp_directory.name) / "pos_first.xyz"
+        path.write_text(
+            "2\n"
+            'Lattice="10 0 0 0 10 0 0 0 10" Properties=pos:R:3:species:S:1:id:I:1\n'
+            "1 2 3 B 4\n"
+            "4 5 6 A 5\n"
+            "2\n"
+            'Lattice="10 0 0 0 10 0 0 0 10" Properties=pos:R:3:species:S:1:id:I:1\n'
+            "7 8 9 A 6\n"
+            "10 11 12 B 7\n",
+            encoding="utf-8",
+        )
+        trajectory = load_trajectory(path)
+        self.assertEqual(trajectory.species, ("A", "B"))
+        self.assertEqual(trajectory.atom_counts, {"B": 1, "A": 1})
+        np.testing.assert_allclose(trajectory.frame(0).positions_of("B"), [[1, 2, 3]])
+        np.testing.assert_allclose(trajectory.frame(1).positions_of("A"), [[7, 8, 9]])
+
     def test_standard_xyz_accepts_explicit_box(self) -> None:
         path = Path(self.temp_directory.name) / "standard.xyz"
         path.write_text("2\ncomment\nA 0 0 0\nB 1 0 0\n", encoding="utf-8")

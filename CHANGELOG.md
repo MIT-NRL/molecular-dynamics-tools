@@ -3,7 +3,7 @@
 This project follows semantic versioning. User-visible changes will be recorded
 here as the package is developed.
 
-## 0.2.0 - Unreleased
+## 0.2.0 - 2026-09-21
 
 - Add atom-resolved RAD environments with neighbor distances, speciation,
   occupancy, and lifetime summaries.
@@ -17,7 +17,8 @@ here as the package is developed.
   radii against periodic box limits before neighbor queries.
 - Make progress displays opt-in; add portable CI checks, a Conda recipe, and
   concise public installation and calculation documentation.
-- Remove machine-specific trajectory paths from experiments and optional tests.
+- Keep workstation-specific experiment scripts out of the repository and make
+  optional tests portable.
 - Report creation or reuse of normalized XYZ caches with their locations and
   sizes, and write new cache files atomically.
 - Warn when scattering replaces a missing singleton self-correlation with an

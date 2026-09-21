@@ -6,7 +6,8 @@ package:
   version: {{ version }}
 
 source:
-  path: ..
+  git_url: https://github.com/MIT-NRL/molecular-dynamics-tools.git
+  git_rev: v{{ version }}
 
 build:
   number: 0
@@ -40,7 +41,6 @@ test:
 about:
   home: https://github.com/MIT-NRL/molecular-dynamics-tools
   dev_url: https://github.com/MIT-NRL/molecular-dynamics-tools
-  issue_url: https://github.com/MIT-NRL/molecular-dynamics-tools/issues
   license: BSD-3-Clause
   license_file: LICENSE
   summary: Reusable molecular-dynamics trajectory and structural analyses

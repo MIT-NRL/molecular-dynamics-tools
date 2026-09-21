@@ -41,6 +41,7 @@ venv/
 *.log
 scratch/
 data/
+experiments/
 
 # Generated benchmarks, figures, tables, and analysis products
 artifacts/

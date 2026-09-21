@@ -208,10 +208,11 @@ when an existing production script needs a gradual transition.
 Package source and portable tests must not depend on workstation-specific data.
 Small synthetic trajectories should be generated inside tests. Large production
 trajectories remain outside the repository and may be used by explicitly
-optional regression tests, benchmarks, or scripts under `experiments/`.
+optional regression tests or benchmarks. Workstation-specific scripts under
+`experiments/` are local and ignored by Git.
 
 Generated plots, tables, timing data, and comparison metadata are written below
-`artifacts/` and are not committed. Local trajectory roots are supplied to
+`artifacts/` and are not committed. Local trajectory roots can be supplied to
 experiments through `MDT_EXPERIMENT_DATA`; `data/` and `.mdtc` caches are ignored.
 An experiment should record enough inputs and numerical settings in its output
 metadata to make a local result auditable.

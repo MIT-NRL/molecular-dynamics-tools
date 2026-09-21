@@ -28,23 +28,29 @@ Trajectory
   - selected source-frame numbers
   - topology-derived atom labels
   - custom extended-XYZ box/origin metadata
+  - optional normalized-XYZ file-backed copy
         |
         +----> serial calculator streams selected frames
         |
         +----> workers receive the indexed Universe once and stream contiguous chunks
 ```
 
-Coordinate arrays are deliberately absent from `TrajectorySource`. For XYZ, a
-bounded serial import such as `frames=slice(0, 10)` reads metadata only through
-frame 9. Multiprocessing asks MDAnalysis to build its full random-access index
-once in the parent so workers do not repeat the scan.
+Coordinate arrays are deliberately absent from `TrajectorySource`. For XYZ,
+automatic species-order detection samples a few source frames. If order or
+column layout needs normalization, the full file is rewritten to a reusable
+temporary copy before frame selection; its location and size are reported.
+Any remaining frame-to-frame label changes are represented by compact
+per-frame codes.
+Multiprocessing asks MDAnalysis to build its random-access index once in the
+parent so workers do not repeat the scan. Normalization preserves species
+labels, but does not establish persistent atom identities across frames.
 
 ## Shared execution contract
 
 `_execution` owns CPU validation, affinity, frame chunking, and the
 serial-versus-multiprocessing plan.
 
-- `ncore` is a hard total logical-CPU budget.
+- `ncore` is the total process/native-thread budget, defaulting to one.
 - Serial: one process, `ncore` native threads.
 - Multiprocessing: at most `ncore` processes, one native thread each.
 - `backend="auto"` chooses multiprocessing only when the core budget, selected
@@ -52,10 +58,14 @@ serial-versus-multiprocessing plan.
   startup. Explicit `serial` and `multiprocessing` choices bypass this estimate.
 - Worker processes receive the indexed, pickleable Universe once in their
   initializer, not coordinates.
-- Linux affinity is applied temporarily and restored after each call.
+- Progress is opt-in with `show_progress=True`.
+- Linux affinity constrains the selected CPUs and is restored after each call;
+  on platforms without that API, worker and library thread counts are limited
+  but processes are not pinned to particular CPUs.
 
-All future trajectory calculators should use `plan_execution` and contiguous
-frame chunks rather than creating analysis-specific multiprocessing policies.
+Trajectory calculators share `plan_execution` and contiguous frame chunks.
+RDFs use a dedicated accumulation loop but the same process/thread plan and
+worker limits.
 
 ## Module responsibilities
 
@@ -69,6 +79,10 @@ Implemented:
 - Existing-Universe wrapping and delegated atom selections
 - Topology-derived atom labels
 - Extended-XYZ lattice and origin metadata supplementation
+- Automatic XYZ species-order/column normalization into an atomically written,
+  reusable temporary copy when needed
+- Compact per-frame species codes when XYZ order varies outside the quick
+  normalization sample
 - Sequential and indexed worker frame iteration
 
 Formats supported by MDAnalysis are available behind the same `Trajectory`
@@ -90,6 +104,7 @@ Implemented:
 - Same-species self-exclusion
 - Ordered-pair ideal-gas shell normalization
 - Variable per-frame cell-volume normalization
+- Validation against the safe periodic query radius before neighbor searches
 
 ### `scattering`
 
@@ -104,13 +119,15 @@ Implemented as a package:
 - Separate unweighted partial RDFs and weighted radial distributions
 - Unity-baseline S(Q) and dimensionless g(r) plotting helpers
 - Direct neutron RDF weighting and optional Lorch-windowed X-ray transforms
+- A warning and explicit ideal `g_ii(r)=1` placeholder when metadata confirms
+  that a missing self-pair belongs to a singleton species
 - Single-process vectorized execution without an unnecessary `ncore` argument
 
 ### `transforms`
 
-Implemented batched spherical-Bessel transforms with numerically equivalent
-ZoomFFT and direct trapezoidal backends. This module does not depend on
-SeanFunctions.
+Implemented batched spherical-Bessel transforms with equivalent ZoomFFT and
+direct trapezoidal paths on uniform grids; direct Simpson integration is also
+available.
 
 ### `coordination`
 
@@ -118,11 +135,16 @@ Implemented cutoff and relative-angular-distance coordination calculations:
 
 - `compute_coordination`
 - `compute_rad_coordination`
-- `compute_rad_environments`
 - `summarize_coordination`
 
 Multiple definitions share one streamed pass through each frame chunk. RAD
-supports directed shells and mutual (`RAD-and`) bonds.
+uses the closed-shell variant by default and supports directed shells and
+mutual (`RAD-and`) bonds.
+
+### `_rad`
+
+Internal periodic RAD-closed neighbor geometry shared by coordination and
+atom-resolved environment calculations.
 
 ### `angles`
 
@@ -141,32 +163,38 @@ Public clustering calculations are grouped under `mdt.clustering`:
 
 Both return named result objects with a `cluster_distribution` table and
 metadata. Shared-neighbor results additionally expose sharing, per-frame, and
-percolation tables. All shared-neighbor connections are categorized as
-connected, corner, edge, and face by default.
+percolation tables. By default, shared-neighbor results include the union
+`connected` network and mutually exclusive corner-, edge-, and face-sharing
+networks. Distance clustering can normalize by component or by atoms of a
+selected species; shared-neighbor cluster distributions are center-atom
+normalized.
 
 ### Internal cluster graph implementation
 
-Implemented union-find, connected-component, and periodic-wrapping kernels
-shared by distance and shared-neighbor clustering.
+Implemented union-find and connected-component kernels shared by distance and
+shared-neighbor clustering. Periodic-wrapping analysis is used by the
+shared-neighbor method.
 
 Sharing and percolation are evaluated from the same per-frame network, so
 center-neighbor construction is not repeated. The result groups sharing
 distributions, cluster distributions, per-frame wrapping data, finite-cluster
 moments, and aggregate percolation statistics.
 
-### `environments`
+### `rad` and `environments`
 
-Implemented atom-resolved RAD environments with species counts, periodic
-contact distances, mutual-contact classification, speciation, occupancy, and
-sample-based contact lifetimes.
+`rad` implements atom-resolved RAD environments with species counts, periodic
+contact distances, mutual-contact classification, and speciation. Occupancy
+and sample-based contact lifetimes require the caller to confirm stable atom
+identities. `environments` re-exports this public API.
 
 ### `cache`
 
 Implemented reusable result caching through `AnalysisCache`. Scientific inputs,
 the analytical trajectory view, source-file fingerprints, package version, and
-analysis implementation identify entries. Results use checksummed, atomic,
-non-pickle archives; Parquet is optional and table JSON is the dependency-free
-fallback.
+analysis implementation identify entries; process counts and progress do not.
+Each `.mdtc` entry is an atomically replaced ZIP archive with a checksummed
+JSON manifest. Tables use Parquet when PyArrow is installed and pandas table
+JSON otherwise; arrays use `.npy`. Cache storage never uses pickle.
 
 ## Compatibility policy
 
@@ -183,5 +211,7 @@ trajectories remain outside the repository and may be used by explicitly
 optional regression tests, benchmarks, or scripts under `experiments/`.
 
 Generated plots, tables, timing data, and comparison metadata are written below
-`artifacts/` and are not committed. An experiment should record enough inputs
-and numerical settings in its output metadata to make a local result auditable.
+`artifacts/` and are not committed. Local trajectory roots are supplied to
+experiments through `MDT_EXPERIMENT_DATA`; `data/` and `.mdtc` caches are ignored.
+An experiment should record enough inputs and numerical settings in its output
+metadata to make a local result auditable.

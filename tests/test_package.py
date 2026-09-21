@@ -8,7 +8,7 @@ import molecular_dynamics_tools as mdt
 
 class PackageTests(unittest.TestCase):
     def test_version(self) -> None:
-        self.assertEqual(mdt.__version__, "0.1.0")
+        self.assertEqual(mdt.__version__, "0.2.0")
 
     def test_public_trajectory_and_rdf_exports(self) -> None:
         self.assertTrue(callable(mdt.load_trajectory))

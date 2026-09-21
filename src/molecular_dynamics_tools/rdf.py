@@ -588,7 +588,7 @@ def compute_rdfs(
     frames: slice | Sequence[int] | None = None,
     ncore: int | None = 1,
     backend: Backend = "auto",
-    show_progress: bool = True,
+    show_progress: bool = False,
 ) -> pd.DataFrame:
     """Compute partial RDFs from an MDAnalysis-backed trajectory.
 
@@ -671,7 +671,7 @@ def compute_spectral_rdfs(
     frames: slice | Sequence[int] | None = None,
     ncore: int | None = 1,
     backend: Backend = "auto",
-    show_progress: bool = True,
+    show_progress: bool = False,
     auto_pilot_frames: int | None = None,
     auto_min_modes: int = 10,
     auto_max_modes: int = 120,

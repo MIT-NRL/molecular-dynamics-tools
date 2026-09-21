@@ -1,14 +1,16 @@
 """Tests for MDAnalysis-backed trajectory loading."""
 
 import gc
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import MDAnalysis as mda
 import numpy as np
 
-from molecular_dynamics_tools import load_trajectory
+from molecular_dynamics_tools import load_trajectory, normalize_xyz_species_order
 
 
 def write_synthetic_xyz(path: Path, *, frame_count: int = 8) -> None:
@@ -104,11 +106,34 @@ class TrajectoryTests(unittest.TestCase):
             "10 11 12 B 7\n",
             encoding="utf-8",
         )
-        trajectory = load_trajectory(path)
+        message = io.StringIO()
+        with redirect_stdout(message):
+            trajectory = load_trajectory(path)
         self.assertEqual(trajectory.species, ("A", "B"))
         self.assertEqual(trajectory.atom_counts, {"B": 1, "A": 1})
         np.testing.assert_allclose(trajectory.frame(0).positions_of("B"), [[1, 2, 3]])
         np.testing.assert_allclose(trajectory.frame(1).positions_of("A"), [[7, 8, 9]])
+        cache_path = trajectory.filename
+        self.assertIsNotNone(cache_path)
+        self.assertIn("Normalizing full XYZ trajectory", message.getvalue())
+        self.assertIn(str(cache_path.resolve()), message.getvalue())
+        self.assertIn(f"{cache_path.stat().st_size:,} bytes", message.getvalue())
+
+        message = io.StringIO()
+        with redirect_stdout(message):
+            reused = load_trajectory(path)
+        self.assertEqual(reused.filename, cache_path)
+        self.assertIn("Reusing normalized XYZ cache", message.getvalue())
+        self.assertIn(f"{cache_path.stat().st_size:,} bytes", message.getvalue())
+
+    def test_failed_xyz_normalization_does_not_leave_a_cache_file(self) -> None:
+        path = Path(self.temp_directory.name) / "incomplete.xyz"
+        destination = Path(self.temp_directory.name) / "normalized.xyz"
+        path.write_text("1\ncomment\nA 0 0 0\n1\ncomment\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "incomplete atom block"):
+            normalize_xyz_species_order(path, destination)
+        self.assertFalse(destination.exists())
+        self.assertEqual(list(destination.parent.glob(f".{destination.name}.*.tmp")), [])
 
     def test_standard_xyz_accepts_explicit_box(self) -> None:
         path = Path(self.temp_directory.name) / "standard.xyz"

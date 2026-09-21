@@ -346,7 +346,14 @@ class _ResultWriter:
             attrs = self.value(value.attrs)
             if self.storage == "parquet":
                 buffer = io.BytesIO()
-                value.to_parquet(buffer, index=True, engine="pyarrow")
+                # Pandas forwards DataFrame.attrs to Parquet metadata and
+                # requires it to be JSON serializable.  MDT attributes may
+                # contain definitions/dataclasses, which this cache already
+                # serializes safely in the manifest below.  Write a shallow
+                # attribute-free view and restore attrs on cache reads.
+                table = value.copy(deep=False)
+                table.attrs = {}
+                table.to_parquet(buffer, index=True, engine="pyarrow")
                 filename = self._blob(".parquet", buffer.getvalue())
                 storage = "parquet"
             else:

@@ -21,9 +21,11 @@ from molecular_dynamics_tools._execution import (
     plan_execution,
 )
 
-LARGE_TRAJECTORY = Path(
-    "/home/sfayfar/Python/Cluster_MD_Calcs/Trajectory/"
-    "FlibeCsF_510C_64x_train1_nvt_equi.xyz"
+_LARGE_TRAJECTORY_ENV = os.environ.get("MDT_LARGE_TRAJECTORY")
+LARGE_TRAJECTORY = (
+    Path(_LARGE_TRAJECTORY_ENV).expanduser()
+    if _LARGE_TRAJECTORY_ENV
+    else None
 )
 
 
@@ -409,8 +411,12 @@ class RDFTests(unittest.TestCase):
         if available == 256:
             self.assertEqual(plan.ncore / available, 0.5)
 
-    @unittest.skipUnless(LARGE_TRAJECTORY.is_file(), "large local trajectory not available")
+    @unittest.skipUnless(
+        LARGE_TRAJECTORY is not None and LARGE_TRAJECTORY.is_file(),
+        "set MDT_LARGE_TRAJECTORY to run the large-file regression",
+    )
     def test_large_trajectory_four_frame_subset(self) -> None:
+        assert LARGE_TRAJECTORY is not None
         trajectory = load_trajectory(LARGE_TRAJECTORY, frames=slice(0, 4))
         options = {
             "pairs": [("Be", "F")],

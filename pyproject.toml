@@ -7,6 +7,8 @@ name = "molecular-dynamics-tools"
 dynamic = ["version"]
 description = "Reusable tools for molecular-dynamics trajectory and structural analysis"
 readme = "README.md"
+authors = [{name = "Sean Fayfar"}]
+keywords = ["molecular dynamics", "trajectory analysis", "RDF", "scattering"]
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"

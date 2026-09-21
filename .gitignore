@@ -24,7 +24,8 @@ htmlcov/
 # Local Python and conda environments
 .conda/
 .env
-.env.local
+.env.*
+!.env.example
 .venv/
 env/
 venv/
@@ -39,9 +40,13 @@ venv/
 # Logs and local scratch space
 *.log
 scratch/
+data/
 
 # Generated benchmarks, figures, tables, and analysis products
 artifacts/
+analysis-cache/
+*.mdtc
+*.mdtc.lock
 
 # Large molecular-dynamics trajectory formats should remain outside the repo.
 *.dcd

@@ -7,6 +7,7 @@ import time
 import unittest
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from importlib.util import find_spec
 from pathlib import Path
 
 import MDAnalysis as mda
@@ -133,6 +134,16 @@ class AnalysisCacheTests(unittest.TestCase):
         assert_frame_equal(restored.cluster_distribution, produced.cluster_distribution)
         assert_frame_equal(restored.frame_summary, produced.frame_summary)
         self.assertIsInstance(restored, SharedNeighborClusterResult)
+
+    @unittest.skipUnless(find_spec("pyarrow"), "requires pyarrow")
+    def test_parquet_round_trips_non_json_dataframe_attrs(self) -> None:
+        cache = AnalysisCache(self.root / "cache", storage="parquet")
+        produced = cache.get_or_compute(_result_calculation, 2.0)
+        restored = cache.get_or_compute(_result_calculation, 2.0)
+
+        self.assertTrue(cache.last_info.hit)
+        self.assertEqual(restored.cluster_distribution.attrs, produced.cluster_distribution.attrs)
+        assert_frame_equal(restored.cluster_distribution, produced.cluster_distribution)
 
     def test_keys_exclude_execution_settings_but_retain_algorithm_backend(self) -> None:
         cache = AnalysisCache(self.root / "cache")

@@ -1,65 +1,53 @@
 # Molecular Dynamics Tools
 
-`molecular-dynamics-tools` is a standalone Python package for reusable
-molecular-dynamics trajectory and structural-analysis tools.
+`molecular-dynamics-tools` provides reusable trajectory and structural analyses
+for molecular-dynamics simulations. It uses MDAnalysis for trajectory I/O and
+supports serial and multiprocessing execution.
 
-The package is a clean rebuild of the original `MolecularDynamicsTools.py`
-helper module. It provides trajectory import, RDFs, scattering, coordination,
-bond-angle, and cluster-network calculations behind a consistent public API.
+Main features:
 
-## Implemented
-
-- MDAnalysis `Universe` backend with broad format support
-- Custom extended-XYZ lattice and origin metadata handling
-- Topology/coordinate file pairs and existing-Universe inputs
-- Bounded trajectory import for inexpensive serial testing
-- Serial and multiprocessing histogram and spectral RDF calculations
-- Faber–Ziman and Ashcroft–Langreth neutron/X-ray scattering calculations
-- FFT partial structure factors and normalized weighted radial distributions
-- Cutoff and relative-angular-distance (RAD) coordination distributions
-- Bond-angle probability densities
-- Direct cutoff-bond cluster distributions
-- Bridging-ligand corner/edge/face sharing and periodic percolation
-- One shared total-core contract for analysis functions
-- File-backed workers without coordinate precaching
-
-## Planned
-
-- Specialized local-environment analyses
-
-See [docs/architecture.md](docs/architecture.md) for module boundaries and
-naming conventions.
+- Histogram and spectral radial distribution functions
+- Neutron and X-ray scattering calculations
+- Cutoff and relative-angular-distance (RAD) coordination
+- Atom-resolved RAD environments and neighbor distances
+- Bond-angle distributions
+- Distance and shared-neighbor clustering
+- Periodic percolation analysis
+- Reusable, provenance-aware result caching
 
 ## Installation
 
-Clone the repository and install it into an isolated environment. For a conda
-development environment:
-
-Using conda:
+### Conda (recommended)
 
 ```bash
-conda env create -f environment.yml
-conda activate molecular-dynamics-tools
+conda create -n mdt -c seanfayfar -c conda-forge molecular-dynamics-tools
+conda activate mdt
 ```
 
-Using an existing Python environment:
+### Pip from GitHub
+
+```bash
+python -m pip install "git+https://github.com/MIT-NRL/molecular-dynamics-tools.git"
+```
+
+### Clone the repository
+
+```bash
+git clone https://github.com/MIT-NRL/molecular-dynamics-tools.git
+cd molecular-dynamics-tools
+python -m pip install .
+```
+
+For development:
 
 ```bash
 python -m pip install -e ".[dev]"
 ```
 
-For a runtime-only editable installation, use `python -m pip install -e .`.
-Plotting is an optional dependency when the package is installed without the
-development extras:
+Optional extras are `plot`, `progress`, and `cache` (Parquet serialization via
+PyArrow).
 
-```bash
-python -m pip install -e ".[plot]"
-```
-
-## Trajectory and RDF workflow
-
-The distribution name uses hyphens, while the Python import uses underscores.
-Trajectories can be used as context managers so file handles close promptly:
+## Quick start
 
 ```python
 import molecular_dynamics_tools as mdt
@@ -68,403 +56,264 @@ with mdt.load_trajectory("simulation.xyz") as trajectory:
     rdfs = mdt.compute_rdfs(
         trajectory,
         step=0.02,
-        r_range=(0.0, None),
-        ncore=24,
+        ncore=8,
     )
 ```
 
-`load_trajectory` returns a package-owned `Trajectory` wrapper whose public
-`.universe` attribute is the MDAnalysis `Universe` used for coordinate loading.
-The wrapper records frame selection and package metadata, but it does not cache
-coordinates. Each frame is read only when requested. It accepts a single file,
-a topology plus coordinate file, or an existing Universe:
+`load_trajectory` accepts a single trajectory, a topology/coordinate pair, or
+an existing MDAnalysis `Universe`:
 
 ```python
+trajectory = mdt.load_trajectory("simulation.xyz")
 trajectory = mdt.load_trajectory("topology.psf", "production.dcd")
-trajectory = mdt.load_trajectory(existing_universe)
-protein = trajectory.universe.select_atoms("protein")
+trajectory = mdt.load_trajectory(universe)
 ```
 
-A bounded source slice stops indexing early, which is useful when testing a
-large file:
+Use `frames` to select part of a trajectory:
 
 ```python
-sample = mdt.load_trajectory(
-    "very-large-simulation.xyz",
-    frames=slice(0, 10),
-)
+trajectory = mdt.load_trajectory("simulation.xyz", frames=slice(0, 1000, 10))
 ```
 
-Atom labels come from the Universe topology (`elements`, then `names`, then
-`types` by default). As with MDAnalysis generally, atom identity and ordering
-must remain stable across trajectory frames. Use `atom_attribute="names"` or
-`atom_attribute="types"` when that better represents the desired RDF labels.
-For extended XYZ, the custom loader preserves per-frame `Lattice` and `Origin`
-metadata that MDAnalysis does not expose.
+If an XYZ needs species-order or column normalization, loading creates or
+reuses a normalized copy of the full file in the system temporary directory
+and prints its location and size. The original file is unchanged.
 
-RDF resolution can be specified either by total bin count or by an exact radial
-step. The latter keeps the sampling interval consistent across box sizes:
+## Backends and result conventions
+
+- **MDAnalysis** reads trajectory and topology formats and supplies atom
+  selections. It is the trajectory I/O layer, not a separate analysis method.
+- **freud** supplies periodic simulation boxes, minimum-image distances, and
+  neighbor searches used by the structural calculations.
+- **NumPy, pandas, and SciPy** provide numerical operations, labeled result
+  tables, and scattering transforms.
+- **periodictable** supplies atomic masses, coherent neutron scattering
+  lengths, and neutral or ionic X-ray form factors. Isotope mixtures and ion
+  charges can be overridden in the scattering inputs.
+
+Table-based calculations return pandas `DataFrame` objects: the first column
+is the independent coordinate and the remaining columns are labeled results.
+Calculation settings and execution details are stored in `DataFrame.attrs`.
+More structured analyses return result dataclasses containing named tables and
+a `metadata` dictionary.
+
+## Radial distribution functions
 
 ```python
-rdfs = mdt.compute_rdfs(trajectory, step=0.02, r_range=(0.0, None))
-```
-
-If the safe radial range is not an exact multiple of `step`, the incomplete
-final bin is omitted. For triclinic cells, the safe radius is half the shortest
-perpendicular face separation rather than half the shortest lattice vector.
-Explicit ranges are validated against every selected frame before workers are
-started. `bins` and `step` cannot be supplied together.
-
-Smooth spectral RDFs are available as a separate calculator:
-
-```python
-spectral = mdt.compute_spectral_rdfs(
+rdfs = mdt.compute_rdfs(
     trajectory,
-    modes={("Na", "Na"): 40, ("Na", "Cl"): 60, ("Cl", "Cl"): 50},
+    pairs=[("Na", "Na"), ("Na", "Cl"), ("Cl", "Cl")],
     step=0.02,
-    r_range=(0.0, 6.0),
-    ncore=32,
+    r_range=(0.0, None),
+    ncore=8,
 )
-```
 
-`modes` accepts one positive integer, a complete pair-to-integer mapping, or
-`"auto"`. Pair keys are symmetric. Automatic selection calculates a bounded
-pilot spectrum through `auto_max_modes=120`, fits the decay-to-noise-floor
-elbow separately for every pair, reuses the pilot sums, and processes remaining
-frames only through the selected cutoffs:
-
-```python
-spectral = mdt.compute_spectral_rdfs(
+spectral_rdfs = mdt.compute_spectral_rdfs(
     trajectory,
     modes="auto",
-    auto_pilot_frames=128,  # optional override
-    ncore=32,
-)
-print(spectral.attrs["spectral"]["selected_modes"])
-```
-
-Without an override, the pilot targets roughly 100,000 atom-frames and is
-clamped to 128--1,024 frames or the available trajectory length. Fit diagnostics
-are stored under `result.attrs["spectral"]["auto"]`. Spectral `step` controls
-the returned sampling grid; it does not create bins. The standard histogram
-calculator remains the default recommendation.
-
-## Coordination and bond-angle workflow
-
-Cutoff coordination accepts one or more `(center, neighbor, r_max)` or
-`(center, neighbor, r_min, r_max)` definitions and streams them in one pass:
-
-```python
-coordination = mdt.compute_coordination(
-    trajectory,
-    [
-        ("Be", "F", 2.35),
-        ("Li", "F", 2.75),
-        ("Cs", "F", 3.50),
-    ],
-    ncore=24,
-)
-summary = mdt.summarize_coordination(coordination)
-```
-
-RAD coordination does not use a distance cutoff. Directed mode asks which
-neighbors are in each center atom's RAD shell; mutual mode retains a bond only
-when both atoms include one another:
-
-```python
-directed = mdt.compute_rad_coordination(
-    trajectory,
-    [("Be", "F"), ("Li", "F")],
-    bond_mode="directed",
-    ncore=24,
-)
-mutual = mdt.compute_rad_coordination(
-    trajectory,
-    [("Be", "F")],
-    bond_mode="mutual",
-    ncore=24,
+    step=0.02,
+    ncore=8,
 )
 ```
 
-For atom-resolved RAD environments, species counts, and periodic distances,
-retain the contacts instead of reducing directly to a distribution:
+Both functions calculate partial pair distribution functions, `g_ij(r)`.
+Pair counts are divided by spherical-shell volume and the ideal pair density,
+so `g(r)` approaches 1 for a spatially uniform system. `compute_rdfs` uses
+distance histograms; `compute_spectral_rdfs` represents the same normalized
+quantity with the spectral Monte Carlo cosine expansion of
+[Patrone and Rosch, J. Chem. Phys. 146, 094107 (2017)](https://doi.org/10.1063/1.4977516).
+The optional automatic mode selector is an MDT heuristic built on that
+expansion. Results contain `r` in distance units followed by columns such as
+`Na-Cl`; spectral mode selections and other settings are retained in `.attrs`.
 
-```python
-environments = mdt.compute_rad_environments(
-    trajectory,
-    center_species=("U", "Te"),
-    neighbor_species=("Cl", "Te", "U"),
-    ncore=24,
-)
-u_te = environments.contacts_between("U", "Te")
-u_speciation = environments.speciation_distribution(("Cl", "Te"))
-```
+## Scattering
 
-`contacts` contains the logical and source frame, both atom indices, species,
-minimum-image distance, and an `is_mutual` flag. `environments` includes zero
-counts and distance summaries for every requested neighbor species and center.
-Directed output therefore supports U→Te, Te→U, and mutual-contact analyses in
-one pass when both center species are requested. The implemented RAD variant is
-RAD-closed; shells terminate at the first blocked candidate.
-
-Atom-pair occupancy and lifetime helpers require the caller to acknowledge that
-indices retain physical identity across frames:
-
-```python
-occupancy = environments.occupancy(
-    "U", "Te", assume_stable_atom_identity=True
-)
-lifetimes = environments.lifetimes(
-    "U", "Te", assume_stable_atom_identity=True
-)
-```
-
-Lifetimes are reported in consecutive analyzed samples, so subsampled frames
-are not presented as consecutive simulation time.
-
-Bond-angle definitions are `(first, center, third, first_center_max,
-center_third_max)`. Equivalent outer atoms are counted as unordered pairs when
-their cutoffs match, avoiding duplicate angles:
-
-```python
-angles = mdt.compute_bond_angles(
-    trajectory,
-    [
-        ("F", "Be", "F", 2.35, 2.35),
-        ("Be", "F", "Be", 2.35, 2.35),
-    ],
-    bins=180,
-    ncore=24,
-)
-```
-
-All returned tables store execution details in `result.attrs["execution"]`.
-Use `CoordinationDefinition` or `AngleDefinition` when two definitions would
-otherwise have the same generated column name and need explicit labels.
-
-## Cluster workflow
-
-Clustering is grouped under the `mdt.clustering` namespace. Both calculations
-use the same connected-component machinery but differ in how graph connections
-are defined.
-
-`compute_by_distance` connects one species to itself or two species to each
-other using a distance cutoff:
-
-```python
-distance = mdt.clustering.compute_by_distance(
-    trajectory,
-    species=("Be", "F"),
-    cutoff=2.35,
-    count_species="Be",
-    include_isolated=False,
-    ncore=24,
-)
-
-distance.cluster_distribution
-```
-
-With `count_species="Be"`, cluster size is the number of Be atoms and the
-distribution is sampled once per Be atom. Without `count_species`, cluster
-size is the total number of selected atoms and the distribution is sampled
-once per connected component. Passing a single species, such as
-`species="Li"`, constructs a same-species distance graph and excludes
-self-pairs. `r_min=0.0` means no positive lower distance cutoff; it does not
-make an atom its own neighbor. Set `r_min` to exclude shorter contacts; it must
-satisfy `0 <= r_min < cutoff`. By default, size-one components are omitted;
-set `include_isolated=True` to retain them.
-
-`compute_by_shared_neighbors` projects a center-neighbor distance graph onto
-the centers. The graph is built once per frame and reused for the requested
-category distributions—all four by default—and percolation:
-
-```python
-network = mdt.clustering.compute_by_shared_neighbors(
-    trajectory,
-    centers="Be",
-    neighbors="F",
-    cutoff=2.35,
-    ncore=24,
-)
-
-network.sharing_distribution              # shared-neighbor count and type
-network.cluster_distribution              # connected/corner/edge/face clusters
-network.frame_summary                     # links and wrapping per frame
-network.percolation_cluster_distribution  # total and finite component counts
-network.percolation_summary               # means, deviations, wrap probabilities
-```
-
-All four connection outputs are calculated by default; `connections=` can
-request a subset. `connected` is the union of all center pairs sharing at
-least one neighbor; one shared neighbor is corner sharing, two is edge sharing,
-and three or more is face sharing. `min_shared_neighbors` is the minimum
-shared-neighbor count for a percolation edge, independently of `connections`;
-`3` retains links sharing three or more neighbors. Periodic
-percolation is detected from inconsistent image translations around network
-cycles, independently along x, y, and z. `include_isolated=False` omits
-size-one center components from cluster and percolation component tables.
-
-With `r_min=0.0`, matching cutoff and isolation settings, and `connections`
-including `"connected"`, two-species distance clustering with `count_species`
-set to the center is numerically equivalent to the `connected` shared-neighbor
-distribution. The shared-neighbor calculation adds categorized networks and
-percolation details.
-
-## Scattering workflow
-
-RDF results carry atom counts, pair identities, and mean number density, so a
-scattering calculation made directly from MDT output does not require the
-composition to be entered again:
+RDF metadata supplies the composition and number density when the RDFs were
+calculated by this package.
 
 ```python
 scattering = mdt.compute_scattering(
     rdfs,
-    isotopes={"Li": {7: 0.99, 6: 0.01}},
-    charges={"Li": 1, "Be": 2, "F": -1, "Cs": 1},
     q_range=(0.0, 25.0),
     q_step=0.01,
-    convention="faber-ziman",
-    xray_window="lorch",  # use None for an unwindowed X-ray inverse transform
 )
 
-scattering.partial_rdfs                 # unweighted g_ij(r)
-scattering.partial_structure_factors    # convention-specific S_ij(Q)
-scattering.neutron.structure_factor     # weighted S(Q)
-scattering.neutron.weighted_rdf         # dimensionless weighted g(r)
+scattering.partial_structure_factors
+scattering.neutron.structure_factor
+scattering.neutron.weighted_rdf
 scattering.xray.structure_factor
 scattering.xray.weighted_rdf
+```
 
-mdt.plot_structure_factor(scattering.neutron)  # total and pairs use S(Q) baseline
+`compute_scattering` transforms the partial RDFs into partial structure factors
+and combines them using composition-dependent neutron or X-ray weights. The
+default is the Faber-Ziman convention; Ashcroft-Langreth is also available.
+Pair columns in `structure_factor` are contributions to `S(Q) - 1`, and their
+sum plus the unit baseline gives `Total`. Pair columns in `weighted_rdf` are
+additive contributions to a dimensionless weighted `g(r)` whose total approaches
+1; this is not the reduced PDF `G(r)`. Results are grouped in a
+`ScatteringResult`, with common partial tables and separate `neutron` and
+`xray` result tables.
+
+Neutron weights use coherent scattering lengths from `periodictable`, including
+user-specified isotope mixtures. X-ray weights use its Q-dependent neutral or
+ionic form factors. RDF metadata normally provides composition and number
+density, but both can be supplied explicitly.
+If a species has only one atom and its self-RDF is unavailable, scattering
+warns before substituting an ideal `g(r)=1` self-pair to complete the total.
+
+With the `plot` extra installed:
+
+```python
+mdt.plot_structure_factor(scattering.neutron)
 mdt.plot_weighted_rdf(scattering.neutron)
 ```
 
-Use `convention="ashcroft-langreth"` for Ashcroft–Langreth partials and total
-normalization. Faber–Ziman partials approach one at high Q; Ashcroft–Langreth
-diagonal partials approach one and cross partials approach zero. Pair columns
-in weighted structure-factor tables remain additive contributions to
-`S(Q) - 1`; the total column is `S(Q)`. `plot_structure_factor` adds one to
-each displayed pair curve so every plotted curve uses the same `S(Q)` unit
-baseline.
-
-Real-space output is a dimensionless weighted radial distribution rather than
-the reduced PDF `G(r)`. Neutron weights are Q-independent, so neutron `g(r)` is
-calculated directly from the partial RDFs without a modification function.
-X-ray weights depend on Q and are inverse transformed using
-`g(r)-1 = [1/(2 pi^2 rho)] integral Q^2[S(Q)-1] sinc(Qr) dQ`. The optional
-`xray_window="lorch"` suppresses termination artifacts from the X-ray form
-factors; set it to `None` for an unwindowed transform. Both outputs approach
-one, and their pair columns add exactly to `Total`.
-
-For imported CSV data without MDT metadata, supply a formula or amount mapping
-and number density explicitly:
+## Coordination numbers
 
 ```python
-scattering = mdt.compute_scattering(
-    imported_rdfs,
-    composition={"Cs": 1, "Li": 13, "Be": 6.5, "F": 27},
-    number_density=0.0805,
-    q_range=(0.0, 25.0),
-    q_step=0.01,
-)
-```
-
-`compute_scattering_weights` and `compute_partial_structure_factors` expose the
-two lower-level stages independently. Scattering uses one vectorized process:
-the FFT workload is small once the trajectory has already been reduced to RDFs,
-so these functions intentionally do not accept `ncore`.
-
-If an MDT RDF contains exactly one atom of a species, its unavailable self-pair
-is completed as an explicitly recorded ideal partial (`g_ii(r)=1`) for total
-scattering. Other missing pairs remain errors.
-
-## Reusable result caching
-
-`AnalysisCache` stores completed analysis results, not trajectory coordinates.
-An exact source-and-parameter match is loaded on later notebook runs:
-
-```python
-cache = mdt.cache.AnalysisCache("analysis-cache", fingerprint="stat")
-
-environments = cache.get_or_compute(
-    mdt.compute_rad_environments,
+coordination = mdt.compute_coordination(
     trajectory,
-    center_species=("U", "Te"),
-    neighbor_species=("Cl", "Te", "U"),
-    ncore=24,
+    [("Na", "Cl", 3.2), ("Cl", "Na", 3.2)],
+    ncore=8,
 )
-print(cache.last_info.hit, cache.last_info.path)
+
+rad_coordination = mdt.compute_rad_coordination(
+    trajectory,
+    [("Na", "Cl")],
+    bond_mode="directed",
+    ncore=8,
+)
+
+summary = mdt.summarize_coordination(coordination)
 ```
 
-Keys include the analysis implementation, scientific arguments, selected
-trajectory frames and metadata, and fingerprints of the source files. `ncore`
-and progress display do not change a key. Use `fingerprint="sha256"` when cache
-entries should follow identical source files across paths or machines; the
-faster `"stat"` mode uses resolved path, file size, and modification time.
+`compute_coordination` counts neighbors inside each specified radial interval.
+`compute_rad_coordination` instead finds the parameter-free RAD shell; directed
+shells may be restricted to mutually selected neighbors with
+`bond_mode="mutual"`. The default and currently supported variant is the
+RAD-closed construction described by
+[Higham and Henchman, J. Chem. Phys. 145, 084108 (2016)](https://doi.org/10.1063/1.4961439).
+Both functions return `coordination` followed by one probability column per
+definition. Each column is normalized over all center-atom/frame samples and
+sums to 1 unless `max_coordination` places probability in the reported
+overflow. `summarize_coordination` returns the mean, variance, and standard
+deviation of each distribution.
 
-Cache modes are `"use"`, `"refresh"`, `"read_only"`, and `"off"`. In-memory or
-transformed trajectories require an explicit `cache_source_id`. Entries use a
-checksummed JSON manifest and safe DataFrame/NumPy serialization rather than
-pickle. Parquet is selected automatically when `pyarrow` is installed; install
-`molecular-dynamics-tools[cache]` to request that optional dependency.
+## Bond angles
 
-## Multiprocessing contract
-
-Every calculator that exposes `ncore` uses the same meaning:
-
-- `ncore` is the total logical-CPU budget for the function call.
-- Serial execution uses one process and limits native scientific-library threads to `ncore`.
-- Multiprocessing uses up to `ncore` workers with freud and BLAS limited to one thread each.
-- The process and native-thread backends are never multiplied together.
-- A temporary CPU-affinity mask enforces the budget on Linux and is restored
-  when the calculation finishes.
-- Worker count is limited by available work. For example, four frames cannot
-  use more than four workers even if `ncore=128`.
-- `backend="auto"` uses conservative, calculator-specific workload thresholds
-  because process startup can be slower than serial execution for short slices.
-
-On a 256-logical-CPU server, a sufficiently large multiprocessing calculation
-with `ncore=128` is restricted to 128 logical CPUs.
-
-Before spawning, the parent builds the MDAnalysis reader random-access index
-once. Each worker receives the indexed Universe once through its initializer and
-then streams a contiguous frame chunk through its own file handle. No
-parent-process coordinate cache is constructed or transferred. DataFrame
-calculators record execution details in `result.attrs["execution"]`; named
-results record them in `result.metadata["execution"]`.
-
-## Benchmark
-
-```bash
-python benchmarks/benchmark_rdf.py simulation.xyz --frames 128 --ncore 32
-python benchmarks/benchmark_structural.py simulation.xyz \
-  --center Be --ligand F --cutoff 2.35 --frames 64 --ncores 2 4 8 16 24
+```python
+angles = mdt.compute_bond_angles(
+    trajectory,
+    [("F", "Be", "F", 2.35, 2.35)],
+    bins=180,
+    ncore=8,
+)
 ```
 
-Both benchmarks verify serial/multiprocessing numerical parity before reporting
-timings. The structural benchmark limits requested worker counts to 24. To
-regress the migration directly against a local copy of the original helper:
+`compute_bond_angles` measures first-center-third angles whose two bonds meet
+the supplied cutoffs. It returns `angle` in degrees and one probability-density
+column per definition; each column integrates to 1 over the angle grid.
 
-```bash
-python experiments/compare_original_structural.py simulation.xyz \
-  /path/to/MolecularDynamicsTools.py --center Be --ligand F --cutoff 2.35 \
-  --second-center Li --second-cutoff 2.75 --frames 4
+## RAD environments
+
+Neighbor species default to all species in the trajectory.
+
+```python
+environments = mdt.compute_rad_environments(
+    trajectory,
+    center_species="Na",
+    ncore=8,
+)
+
+contacts = environments.contacts
+per_center = environments.environments
+na_cl = environments.contacts_between("Na", "Cl")
+speciation = environments.speciation_distribution(("Cl",))
 ```
 
-## Repository layout
+RAD environments retain atom-level detail rather than only a coordination
+histogram. `contacts` is a long table with one row per center-neighbor contact,
+including atom indices, species, periodic minimum-image distance, and mutual
+status. `environments` has one row per center, frame, and neighbor species with
+coordination plus minimum, mean, and maximum distance. Speciation probabilities
+are normalized over center-atom/frame samples. Occupancy and lifetime summaries
+assume atom indices identify the same physical atoms throughout the trajectory.
+This calculation uses the same default RAD-closed method cited above.
 
-- `src/molecular_dynamics_tools/`: installable package source
-- `tests/`: portable unit and numerical-regression tests
-- `benchmarks/`: bounded command-line performance checks
-- `experiments/`: reproducible development and method-comparison scripts
-- `docs/`: architecture and contributor-facing design notes
+## Clustering
 
-Experiment scripts may refer to large local trajectories that are intentionally
-kept outside the repository. Their generated CSVs, figures, and metadata belong
-under `artifacts/`, which is ignored by Git. Package tests create synthetic
-trajectories as needed; an optional local large-trajectory check runs only when
-that external file is present.
+```python
+distance_clusters = mdt.clustering.compute_by_distance(
+    trajectory,
+    species=("Na", "Cl"),
+    cutoff=3.2,
+    count_species="Na",
+    ncore=8,
+)
 
-## Tests
+shared_neighbors = mdt.clustering.compute_by_shared_neighbors(
+    trajectory,
+    centers="Be",
+    neighbors="F",
+    cutoff=2.35,
+    ncore=8,
+)
+
+distance_clusters.cluster_distribution
+shared_neighbors.cluster_distribution
+shared_neighbors.sharing_distribution
+shared_neighbors.percolation_summary
+```
+
+The two clustering methods differ only in how graph edges are defined:
+
+- **Distance clustering** connects selected atoms when
+  `r_min < distance <= cutoff` and finds connected components. With no
+  `count_species`, cluster size counts all selected atoms and each component is
+  one sample. With `count_species`, size counts only that species and the
+  probability distribution is sampled once per counted atom, which gives a
+  central-atom-normalized result. The result contains `cluster_size`,
+  `probability`, and metadata.
+- **Shared-neighbor clustering** first finds center-neighbor contacts, then
+  connects centers that share coordinating neighbors. One shared neighbor is
+  corner sharing, two is edge sharing, and three or more is face sharing;
+  `connected` combines all three. One calculation returns normalized cluster
+  and sharing distributions, per-frame network statistics, finite-component
+  distributions, and periodic percolation summaries. `connections` selects
+  which categorized networks are returned, while `min_shared_neighbors`
+  independently sets the percolation edge rule.
+
+`include_isolated=False` excludes size-one components in both methods. Periodic
+percolation is detected from graph connections that wrap the simulation box.
+
+## Result caching
+
+```python
+cache = mdt.cache.AnalysisCache("analysis-cache")
+
+rdfs = cache.get_or_compute(
+    mdt.compute_rdfs,
+    trajectory,
+    step=0.02,
+    ncore=8,
+)
+```
+
+The default `fingerprint="stat"` is fast for local work. Use
+`fingerprint="sha256"` when identical source files should share entries across
+locations. Cache modes are `use`, `refresh`, `read_only`, and `off`. Cached
+tables preserve their result type, metadata, and `DataFrame.attrs`.
+Cache manifests can contain source paths and analysis parameters; keep cache
+entries out of public repositories.
+
+## Parallel execution
+
+Functions that accept `ncore` use it as the total logical-CPU budget.
+`backend="auto"` selects serial or multiprocessing execution. Workers stream
+trajectory frames from disk without precaching coordinates.
+
+## Development
 
 ```bash
 python -m pytest
@@ -472,9 +321,8 @@ python -m ruff check .
 python -m build
 ```
 
-The test suite includes deterministic serial/multiprocessing comparisons and,
-when present, a four-frame subset of the large local CsFLiBe trajectory. CI
-runs the portable suite and builds both the source distribution and wheel.
+See [docs/architecture.md](docs/architecture.md) for internal module boundaries
+and design conventions.
 
 ## License
 

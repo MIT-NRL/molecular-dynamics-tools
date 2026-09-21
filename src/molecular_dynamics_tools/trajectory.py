@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import tempfile
 from collections.abc import Iterator, Sequence
@@ -558,36 +559,61 @@ def normalize_xyz_species_order(
         destination = Path(output_filename).expanduser()
         destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
+        size = destination.stat().st_size
+        print(
+            f"Reusing normalized XYZ cache: {destination.resolve()} "
+            f"({size:,} bytes, {size / 1024**2:.2f} MiB)",
+            flush=True,
+        )
         return str(destination)
 
-    with source.open("r", encoding="utf-8", errors="replace") as fin, destination.open(
-        "w", encoding="utf-8", newline=""
-    ) as fout:
-        while True:
-            atom_count_line = fin.readline()
-            if not atom_count_line:
-                break
-            header_line = fin.readline()
-            if not header_line:
-                raise ValueError("Malformed XYZ file: missing frame header")
-            try:
-                frame_atom_count = int(atom_count_line.strip())
-            except ValueError as exc:
-                raise ValueError("Malformed XYZ file: invalid atom count") from exc
-            atom_lines = [fin.readline() for _ in range(frame_atom_count)]
-            if len(atom_lines) != frame_atom_count or any(line == "" for line in atom_lines):
-                raise ValueError("Malformed XYZ file: incomplete atom block")
-            grouped: dict[str, list[str]] = {}
-            for line in atom_lines:
-                species, normalized_line = canonical_atom_line(line, header_line)
-                if species not in species_rank:
-                    species_rank[species] = len(species_order)
-                    species_order.append(species)
-                grouped.setdefault(species, []).append(normalized_line)
-            fout.write(atom_count_line)
-            fout.write(header_line)
-            for species in species_order:
-                fout.writelines(grouped.get(species, ()))
+    print(
+        f"Normalizing full XYZ trajectory ({source.stat().st_size:,} source bytes) "
+        f"into cache: {destination.resolve()}",
+        flush=True,
+    )
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with source.open("r", encoding="utf-8", errors="replace") as fin, os.fdopen(
+            descriptor, "w", encoding="utf-8", newline=""
+        ) as fout:
+            while True:
+                atom_count_line = fin.readline()
+                if not atom_count_line:
+                    break
+                header_line = fin.readline()
+                if not header_line:
+                    raise ValueError("Malformed XYZ file: missing frame header")
+                try:
+                    frame_atom_count = int(atom_count_line.strip())
+                except ValueError as exc:
+                    raise ValueError("Malformed XYZ file: invalid atom count") from exc
+                atom_lines = [fin.readline() for _ in range(frame_atom_count)]
+                if len(atom_lines) != frame_atom_count or any(line == "" for line in atom_lines):
+                    raise ValueError("Malformed XYZ file: incomplete atom block")
+                grouped: dict[str, list[str]] = {}
+                for line in atom_lines:
+                    species, normalized_line = canonical_atom_line(line, header_line)
+                    if species not in species_rank:
+                        species_rank[species] = len(species_order)
+                        species_order.append(species)
+                    grouped.setdefault(species, []).append(normalized_line)
+                fout.write(atom_count_line)
+                fout.write(header_line)
+                for species in species_order:
+                    fout.writelines(grouped.get(species, ()))
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    size = destination.stat().st_size
+    print(
+        f"Normalized XYZ cache ready: {destination.resolve()} "
+        f"({size:,} bytes, {size / 1024**2:.2f} MiB)",
+        flush=True,
+    )
     return str(destination)
 
 def _atom_labels(universe: mda.Universe, requested: str) -> tuple[str, NDArray[np.str_]]:

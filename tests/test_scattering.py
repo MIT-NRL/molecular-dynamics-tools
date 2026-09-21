@@ -314,12 +314,13 @@ class ScatteringCalculationTests(unittest.TestCase):
             "number_density": 0.05,
             "pairs": (("F", "F"), ("F", "Te")),
         }
-        result = compute_scattering(
-            singleton,
-            probes=("neutron",),
-            q_range=(0.0, 20.0),
-            q_step=0.05,
-        )
+        with self.assertWarnsRegex(UserWarning, "Te-Te.*ideal"):
+            result = compute_scattering(
+                singleton,
+                probes=("neutron",),
+                q_range=(0.0, 20.0),
+                q_step=0.05,
+            )
         np.testing.assert_allclose(result.partial_rdfs["Te-Te"], 1.0)
         np.testing.assert_allclose(result.neutron.structure_factor["Te-Te"], 0.0)
         self.assertEqual(result.metadata["synthetic_ideal_rdf_pairs"], ("Te-Te",))

@@ -1,0 +1,50 @@
+{% set name = "molecular-dynamics-tools" %}
+{% set version = "0.2.0" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+source:
+  path: ..
+
+build:
+  number: 0
+  noarch: python
+  script: {{ PYTHON }} -m pip install . --no-deps --no-build-isolation -v
+
+requirements:
+  host:
+    - python >=3.10
+    - pip
+    - setuptools >=77
+    - wheel
+  run:
+    - python >=3.10
+    - mdanalysis >=2.6
+    - freud >=3.0
+    - numpy >=1.24
+    - pandas >=2.0
+    - periodictable >=1.6
+    - scipy >=1.10
+    - threadpoolctl >=3.1
+
+test:
+  imports:
+    - molecular_dynamics_tools
+  requires:
+    - pip
+  commands:
+    - pip check
+
+about:
+  home: https://github.com/MIT-NRL/molecular-dynamics-tools
+  dev_url: https://github.com/MIT-NRL/molecular-dynamics-tools
+  issue_url: https://github.com/MIT-NRL/molecular-dynamics-tools/issues
+  license: BSD-3-Clause
+  license_file: LICENSE
+  summary: Reusable molecular-dynamics trajectory and structural analyses
+
+extra:
+  recipe-maintainers:
+    - SFayf

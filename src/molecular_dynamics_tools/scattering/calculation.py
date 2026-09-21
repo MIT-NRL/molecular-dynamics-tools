@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -130,6 +131,15 @@ def _complete_singleton_partials(
     completed_system["pairs"] = ordered_pairs
     completed_system["synthetic_ideal_rdf_pairs"] = tuple(synthetic)
     completed.attrs["system"] = completed_system
+    warnings.warn(
+        "Only one atom is present for each of these species, so their "
+        "self-correlations cannot be measured: "
+        + ", ".join(synthetic)
+        + ". Using ideal g(r)=1 placeholders to complete scattering; "
+        "these are not measured correlations.",
+        UserWarning,
+        stacklevel=3,
+    )
     return completed
 
 

@@ -3,7 +3,27 @@
 This project follows semantic versioning. User-visible changes will be recorded
 here as the package is developed.
 
-## 0.1.0 - Unreleased
+## 0.2.0 - Unreleased
+
+- Add atom-resolved RAD environments with neighbor distances, speciation,
+  occupancy, and lifetime summaries.
+- Add provenance-aware result caching with checksummed `.mdtc` archives and
+  JSON or Parquet table storage; preserve non-JSON DataFrame attributes in
+  Parquet round trips.
+- Unify clustering under `mdt.clustering.compute_by_distance` and
+  `compute_by_shared_neighbors`, including sharing categories and periodic
+  percolation.
+- Fix extended-XYZ species-order and column-order loading, and validate RDF
+  radii against periodic box limits before neighbor queries.
+- Make progress displays opt-in; add portable CI checks, a Conda recipe, and
+  concise public installation and calculation documentation.
+- Remove machine-specific trajectory paths from experiments and optional tests.
+- Report creation or reuse of normalized XYZ caches with their locations and
+  sizes, and write new cache files atomically.
+- Warn when scattering replaces a missing singleton self-correlation with an
+  ideal `g(r)=1` placeholder.
+
+## 0.1.0 - Initial development (not published)
 
 - Create the standalone package scaffold.
 - Define initial module boundaries and development tooling.
@@ -17,24 +37,13 @@ here as the package is developed.
 - Add streaming `compute_spectral_rdfs` with global or pair-specific fixed modes.
 - Add pilot-elbow automatic spectral modes with reusable pilot coefficients and diagnostics.
 - Support mutually exclusive RDF `bins` and exact radial `step` controls.
-- Validate explicit RDF radii against the true triclinic nearest-face limit
-  before starting workers.
 - Standardize `ncore` as the total logical-CPU budget.
 - Enforce that budget across freud and BLAS thread pools to prevent nested oversubscription.
 - Transfer an indexed Universe once per worker without coordinate precaching.
 - Add one reusable streaming frame executor for coordination, angle, and
   clustering calculations.
 - Add cutoff and directed/mutual RAD coordination distributions and summaries.
-- Add atom-resolved RAD environments with periodic distances, structured
-  species counts, reciprocal-contact classification, occupancy, and lifetimes.
-- Add provenance-aware, checksummed analysis-result caching with deterministic
-  source and parameter fingerprints and safe non-pickle serialization.
 - Add multi-definition bond-angle probability densities.
-- Add `mdt.clustering.compute_by_distance` for one- or two-species distance
-  connectivity with total-atom or selected-species cluster sizes.
-- Add `mdt.clustering.compute_by_shared_neighbors` with connected, corner,
-  edge, and face networks by default, plus finite-cluster moments and periodic
-  percolation.
 - Add workload-aware automatic backend selection based on bounded local timing.
 - Add trajectory context-manager and explicit reader-close support.
 - Add a bounded real-trajectory RDF benchmark with numerical parity checks.
@@ -42,5 +51,5 @@ here as the package is developed.
 - Store composition, pair, and mean number-density metadata on RDF results.
 - Add `ScatteringComposition` with isotope mixtures and ionic X-ray form factors.
 - Add Faber–Ziman and Ashcroft–Langreth partial structure factors and weights.
-- Add single-process FFT neutron/X-ray structure factors and weighted reduced PDFs.
+- Add single-process FFT neutron/X-ray structure factors and weighted radial distributions.
 - Keep unweighted partial RDFs distinct from scattering-weighted PDF outputs.

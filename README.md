@@ -186,6 +186,42 @@ mutual = mdt.compute_rad_coordination(
 )
 ```
 
+For atom-resolved RAD environments, species counts, and periodic distances,
+retain the contacts instead of reducing directly to a distribution:
+
+```python
+environments = mdt.compute_rad_environments(
+    trajectory,
+    center_species=("U", "Te"),
+    neighbor_species=("Cl", "Te", "U"),
+    ncore=24,
+)
+u_te = environments.contacts_between("U", "Te")
+u_speciation = environments.speciation_distribution(("Cl", "Te"))
+```
+
+`contacts` contains the logical and source frame, both atom indices, species,
+minimum-image distance, and an `is_mutual` flag. `environments` includes zero
+counts and distance summaries for every requested neighbor species and center.
+Directed output therefore supports U→Te, Te→U, and mutual-contact analyses in
+one pass when both center species are requested. The implemented RAD variant is
+RAD-closed; shells terminate at the first blocked candidate.
+
+Atom-pair occupancy and lifetime helpers require the caller to acknowledge that
+indices retain physical identity across frames:
+
+```python
+occupancy = environments.occupancy(
+    "U", "Te", assume_stable_atom_identity=True
+)
+lifetimes = environments.lifetimes(
+    "U", "Te", assume_stable_atom_identity=True
+)
+```
+
+Lifetimes are reported in consecutive analyzed samples, so subsampled frames
+are not presented as consecutive simulation time.
+
 Bond-angle definitions are `(first, center, third, first_center_max,
 center_third_max)`. Equivalent outer atoms are counted as unordered pairs when
 their cutoffs match, avoiding duplicate angles:
@@ -340,6 +376,36 @@ so these functions intentionally do not accept `ncore`.
 If an MDT RDF contains exactly one atom of a species, its unavailable self-pair
 is completed as an explicitly recorded ideal partial (`g_ii(r)=1`) for total
 scattering. Other missing pairs remain errors.
+
+## Reusable result caching
+
+`AnalysisCache` stores completed analysis results, not trajectory coordinates.
+An exact source-and-parameter match is loaded on later notebook runs:
+
+```python
+cache = mdt.cache.AnalysisCache("analysis-cache", fingerprint="stat")
+
+environments = cache.get_or_compute(
+    mdt.compute_rad_environments,
+    trajectory,
+    center_species=("U", "Te"),
+    neighbor_species=("Cl", "Te", "U"),
+    ncore=24,
+)
+print(cache.last_info.hit, cache.last_info.path)
+```
+
+Keys include the analysis implementation, scientific arguments, selected
+trajectory frames and metadata, and fingerprints of the source files. `ncore`
+and progress display do not change a key. Use `fingerprint="sha256"` when cache
+entries should follow identical source files across paths or machines; the
+faster `"stat"` mode uses resolved path, file size, and modification time.
+
+Cache modes are `"use"`, `"refresh"`, `"read_only"`, and `"off"`. In-memory or
+transformed trajectories require an explicit `cache_source_id`. Entries use a
+checksummed JSON manifest and safe DataFrame/NumPy serialization rather than
+pickle. Parquet is selected automatically when `pyarrow` is installed; install
+`molecular-dynamics-tools[cache]` to request that optional dependency.
 
 ## Multiprocessing contract
 

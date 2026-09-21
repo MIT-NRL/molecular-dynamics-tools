@@ -118,6 +118,7 @@ Implemented cutoff and relative-angular-distance coordination calculations:
 
 - `compute_coordination`
 - `compute_rad_coordination`
+- `compute_rad_environments`
 - `summarize_coordination`
 
 Multiple definitions share one streamed pass through each frame chunk. RAD
@@ -155,8 +156,17 @@ moments, and aggregate percolation statistics.
 
 ### `environments`
 
-Planned specialized local-environment analyses that do not fit a general
-coordination or clustering abstraction.
+Implemented atom-resolved RAD environments with species counts, periodic
+contact distances, mutual-contact classification, speciation, occupancy, and
+sample-based contact lifetimes.
+
+### `cache`
+
+Implemented reusable result caching through `AnalysisCache`. Scientific inputs,
+the analytical trajectory view, source-file fingerprints, package version, and
+analysis implementation identify entries. Results use checksummed, atomic,
+non-pickle archives; Parquet is optional and table JSON is the dependency-free
+fallback.
 
 ## Compatibility policy
 

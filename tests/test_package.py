@@ -22,7 +22,10 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(callable(mdt.ScatteringComposition))
         self.assertTrue(callable(mdt.compute_coordination))
         self.assertTrue(callable(mdt.compute_rad_coordination))
+        self.assertTrue(callable(mdt.compute_rad_environments))
+        self.assertTrue(callable(mdt.RADEnvironmentResult))
         self.assertTrue(callable(mdt.compute_bond_angles))
+        self.assertTrue(callable(mdt.cache.AnalysisCache))
         self.assertTrue(callable(mdt.clustering.compute_by_distance))
         self.assertTrue(callable(mdt.clustering.compute_by_shared_neighbors))
         self.assertTrue(callable(mdt.clustering.ClusterResult))
@@ -31,6 +34,7 @@ class PackageTests(unittest.TestCase):
     def test_scaffold_modules_import(self) -> None:
         modules = (
             "angles",
+            "cache",
             "clustering",
             "clustering.distance",
             "clustering.results",

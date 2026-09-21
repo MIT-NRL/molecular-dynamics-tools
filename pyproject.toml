@@ -31,6 +31,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+cache = ["pyarrow>=14"]
 plot = ["matplotlib>=3.7"]
 progress = ["tqdm>=4.65"]
 test = [

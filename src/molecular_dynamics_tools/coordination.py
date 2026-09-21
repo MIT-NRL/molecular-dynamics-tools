@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Literal
 
 import freud
 import numpy as np
@@ -17,9 +16,13 @@ from ._geometry import (
     freud_box,
     merge_integer_histograms,
 )
+from ._rad import (
+    RADBondMode,
+    normalize_rad_bond_mode,
+    normalize_rad_variant,
+    rad_neighbors,
+)
 from .trajectory import Trajectory
-
-RADBondMode = Literal["directed", "mutual"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,70 +137,12 @@ def _cutoff_chunk(
     return histograms
 
 
-def _normalize_rad_bond_mode(mode: str) -> RADBondMode:
-    normalized = str(mode).strip().lower().replace("-", "_")
-    aliases: dict[str, RADBondMode] = {
-        "directed": "directed",
-        "center": "directed",
-        "one_way": "directed",
-        "rad": "directed",
-        "mutual": "mutual",
-        "and": "mutual",
-        "symmetric": "mutual",
-        "intersection": "mutual",
-        "rad_and": "mutual",
-    }
-    try:
-        return aliases[normalized]
-    except KeyError as exc:
-        raise ValueError("bond_mode must be 'directed' or 'mutual'") from exc
-
-
-def _rad_neighbors(
-    box: freud.Box,
-    positions: NDArray[np.float32],
-    center_index: int,
-    *,
-    distance_tolerance: float = 1e-8,
-) -> NDArray[np.int64]:
-    """Return the Higham-Henchman relative-angular-distance shell."""
-
-    coordinates = np.asarray(positions, dtype=np.float64)
-    displacements = np.asarray(
-        box.wrap(coordinates - coordinates[int(center_index)]), dtype=np.float64
-    )
-    squared_distances = np.einsum("ij,ij->i", displacements, displacements)
-    candidates = np.flatnonzero(squared_distances > distance_tolerance**2)
-    if candidates.size == 0:
-        return np.empty(0, dtype=np.int64)
-    order = np.argsort(squared_distances[candidates], kind="stable")
-    candidates = candidates[order]
-
-    accepted: list[int] = []
-    closer_vectors: list[NDArray[np.float64]] = []
-    closer_distances: list[float] = []
-    for candidate in candidates:
-        distance_squared = float(squared_distances[candidate])
-        distance = float(np.sqrt(distance_squared))
-        if closer_vectors:
-            blockers = np.asarray(closer_vectors)
-            blocker_distances = np.asarray(closer_distances)
-            cosine = (blockers @ displacements[candidate]) / (
-                blocker_distances * distance
-            )
-            if np.any((1.0 / distance_squared) <= cosine / blocker_distances**2):
-                break
-        accepted.append(int(candidate))
-        closer_vectors.append(displacements[candidate])
-        closer_distances.append(distance)
-    return np.asarray(accepted, dtype=np.int64)
-
-
 def _rad_chunk(
     trajectory: Trajectory,
     frame_indices: tuple[int, ...],
     definitions: tuple[CoordinationDefinition, ...],
     bond_mode: RADBondMode,
+    variant: str,
 ) -> dict[str, NDArray[np.int64]]:
     histograms = _empty_histograms(definitions)
     requested: dict[str, list[CoordinationDefinition]] = {}
@@ -211,7 +156,9 @@ def _rad_chunk(
 
         def shell(index: int) -> NDArray[np.int64]:
             if index not in shells:
-                shells[index] = _rad_neighbors(box, frame.positions, index)
+                shells[index] = rad_neighbors(
+                    box, frame.positions, index, variant=variant
+                )
             return shells[index]
 
         def shell_set(index: int) -> set[int]:
@@ -332,6 +279,7 @@ def compute_rad_coordination(
     definitions: Iterable[CoordinationDefinition | Sequence[object]],
     *,
     bond_mode: str = "directed",
+    variant: str = "closed",
     frames: slice | Sequence[int] | None = None,
     max_coordination: int | None = None,
     ncore: int | None = 1,
@@ -342,11 +290,13 @@ def compute_rad_coordination(
 
     ``bond_mode='directed'`` uses each center's shell. ``'mutual'`` keeps a
     neighbor only when both atoms include one another in their RAD shells.
-    Cutoffs present in legacy four-value definitions are accepted but ignored.
+    The implemented ``variant='closed'`` closes a shell at its first blocked
+    candidate. Cutoffs in legacy four-value definitions are accepted but ignored.
     """
 
     normalized = _normalize_definitions(trajectory, definitions, require_cutoff=False)
-    resolved_mode = _normalize_rad_bond_mode(bond_mode)
+    resolved_mode = normalize_rad_bond_mode(bond_mode)
+    resolved_variant = normalize_rad_variant(variant)
     frame_indices = trajectory.resolve_frame_indices(frames)
     center_count = sum(
         trajectory.atom_counts[species]
@@ -364,7 +314,7 @@ def compute_rad_coordination(
         frame_indices,
         plan,
         _rad_chunk,
-        (normalized, resolved_mode),
+        (normalized, resolved_mode, resolved_variant),
         show_progress=show_progress,
         description=f"RAD coordination ({resolved_mode})",
     )
@@ -374,6 +324,7 @@ def compute_rad_coordination(
     )
     result.attrs["method"] = "relative_angular_distance"
     result.attrs["bond_mode"] = resolved_mode
+    result.attrs["variant"] = resolved_variant
     result.attrs["definitions"] = normalized
     result.attrs["execution"] = execution
     return result

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 __version__ = "0.1.0"
 
 if TYPE_CHECKING:
-    from . import clustering
+    from . import cache, clustering
     from .angles import AngleDefinition, compute_bond_angles
     from .coordination import (
         CoordinationDefinition,
@@ -15,6 +15,7 @@ if TYPE_CHECKING:
         compute_rad_coordination,
         summarize_coordination,
     )
+    from .environments import RADEnvironmentResult, compute_rad_environments
     from .rdf import compute_rdfs, compute_spectral_rdfs
     from .scattering import (
         ProbeScatteringResult,
@@ -56,6 +57,14 @@ _LAZY_EXPORTS = {
     "summarize_coordination": (
         "molecular_dynamics_tools.coordination",
         "summarize_coordination",
+    ),
+    "RADEnvironmentResult": (
+        "molecular_dynamics_tools.environments",
+        "RADEnvironmentResult",
+    ),
+    "compute_rad_environments": (
+        "molecular_dynamics_tools.environments",
+        "compute_rad_environments",
     ),
     "compute_rdfs": ("molecular_dynamics_tools.rdf", "compute_rdfs"),
     "compute_spectral_rdfs": ("molecular_dynamics_tools.rdf", "compute_spectral_rdfs"),
@@ -105,6 +114,7 @@ _LAZY_EXPORTS = {
 }
 
 _LAZY_MODULES = {
+    "cache": "molecular_dynamics_tools.cache",
     "clustering": "molecular_dynamics_tools.clustering",
 }
 
@@ -139,13 +149,16 @@ __all__ = [
     "TrajectoryFrame",
     "__version__",
     "ProbeScatteringResult",
+    "RADEnvironmentResult",
     "ScatteringComposition",
     "ScatteringResult",
+    "cache",
     "clustering",
     "compute_partial_structure_factors",
     "compute_bond_angles",
     "compute_coordination",
     "compute_rad_coordination",
+    "compute_rad_environments",
     "compute_rdfs",
     "compute_scattering",
     "plot_structure_factor",

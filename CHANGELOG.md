@@ -25,6 +25,10 @@ here as the package is developed.
 - Add one reusable streaming frame executor for coordination, angle, and
   clustering calculations.
 - Add cutoff and directed/mutual RAD coordination distributions and summaries.
+- Add atom-resolved RAD environments with periodic distances, structured
+  species counts, reciprocal-contact classification, occupancy, and lifetimes.
+- Add provenance-aware, checksummed analysis-result caching with deterministic
+  source and parameter fingerprints and safe non-pickle serialization.
 - Add multi-definition bond-angle probability densities.
 - Add `mdt.clustering.compute_by_distance` for one- or two-species distance
   connectivity with total-atom or selected-species cluster sizes.

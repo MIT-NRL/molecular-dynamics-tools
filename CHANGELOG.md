@@ -3,6 +3,14 @@
 This project follows semantic versioning. User-visible changes will be recorded
 here as the package is developed.
 
+## Unreleased
+
+- Add reusable carbon ring/graphenic-domain analysis, crystallite distributions,
+  diffraction peak fits, apparent coherence lengths, and graphene calibration.
+- Multithread bond angles and bound RDF/angle working memory without thinning atoms.
+- Support selective frame loading for large trajectories; add method documentation
+  and numerical regression tests.
+
 ## 0.2.0 - 2026-09-21
 
 - Add atom-resolved RAD environments with neighbor distances, speciation,

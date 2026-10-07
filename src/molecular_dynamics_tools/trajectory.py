@@ -162,7 +162,12 @@ class Trajectory:
     def iter_frames(
         self, frames: slice | Sequence[int] | None = None
     ) -> Iterator[TrajectoryFrame]:
-        """Stream frames through MDAnalysis without retaining coordinates."""
+        """Read selected frames without retaining coordinates or parsing gaps.
+
+        A contiguous prefix streams sequentially without creating the reader's
+        random-access index. Late, sparse, and reordered selections use indexed
+        seeks so each worker parses only its requested coordinate frames.
+        """
 
         logical_indices = self.resolve_frame_indices(frames)
         if not logical_indices:
@@ -170,18 +175,12 @@ class Trajectory:
         source_indices = tuple(
             self.source.frames[index].source_index for index in logical_indices
         )
-        increasing = all(
-            left < right for left, right in zip(source_indices, source_indices[1:])
+        contiguous_prefix = source_indices[0] == 0 and all(
+            right == left + 1 for left, right in zip(source_indices, source_indices[1:])
         )
-        if increasing:
-            requested = dict(zip(source_indices, logical_indices))
-            final_source_index = source_indices[-1]
-            for timestep in self.universe.trajectory:
-                source_index = int(timestep.frame)
-                if source_index in requested:
-                    yield self._materialize(requested[source_index], timestep)
-                if source_index >= final_source_index:
-                    break
+        if contiguous_prefix:
+            for logical_index, timestep in zip(logical_indices, self.universe.trajectory):
+                yield self._materialize(logical_index, timestep)
             return
         for logical_index, source_index in zip(logical_indices, source_indices):
             yield self._materialize(logical_index, self.universe.trajectory[source_index])

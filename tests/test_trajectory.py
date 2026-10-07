@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 import MDAnalysis as mda
 import numpy as np
@@ -140,6 +141,83 @@ class TrajectoryTests(unittest.TestCase):
         path.write_text("2\ncomment\nA 0 0 0\nB 1 0 0\n", encoding="utf-8")
         trajectory = load_trajectory(path, box=8.0)
         np.testing.assert_allclose(trajectory.dimensions, [8, 8, 8, 90, 90, 90])
+
+    def test_late_sparse_and_reordered_frames_parse_only_selected_coordinates(self):
+        for indices in ((7,), (4, 5, 6), (1, 5, 7), (6, 2, 5)):
+            with self.subTest(indices=indices):
+                with load_trajectory(self.path, frames=slice(0, 8)) as trajectory:
+                    reader = trajectory.universe.trajectory
+                    self.assertFalse(hasattr(reader, "_offsets"))
+                    parsed = []
+                    original = reader._read_next_timestep
+
+                    def observed(*args, **kwargs):
+                        timestep = original(*args, **kwargs)
+                        parsed.append(timestep.frame)
+                        return timestep
+
+                    with patch.object(reader, "_read_next_timestep", side_effect=observed):
+                        frames = list(trajectory.iter_frames(indices))
+                    self.assertEqual(parsed, list(indices))
+                    self.assertEqual([frame.source_index for frame in frames], list(indices))
+                    self.assertTrue(hasattr(reader, "_offsets"))
+
+    def test_contiguous_prefix_streams_without_building_random_access_index(self):
+        with load_trajectory(self.path, frames=slice(0, 8)) as trajectory:
+            reader = trajectory.universe.trajectory
+            self.assertFalse(hasattr(reader, "_offsets"))
+            with patch.object(reader, "_read_frame", wraps=reader._read_frame) as seek:
+                frames = list(trajectory.iter_frames(slice(0, 3)))
+            self.assertEqual([frame.source_index for frame in frames], [0, 1, 2])
+            seek.assert_not_called()
+            self.assertFalse(hasattr(reader, "_offsets"))
+
+    def test_indexed_selection_preserves_variable_cell_species_origin_and_source_window(self):
+        path = Path(self.temp_directory.name) / "variable.xyz"
+        lines = []
+        rng = np.random.default_rng(4513)
+        for index in range(8):
+            cell = np.diag([10 + index, 11 + index, 12 + index]).astype(float)
+            if index % 2:
+                cell[1, 0], cell[2, 0], cell[2, 1] = 1.5, -0.7, 0.8
+            origin = np.asarray([-2 + index, 3 - index, 0.5 * index])
+            species = np.roll(np.asarray(["A", "A", "B", "B"]), index)
+            positions = rng.random((4, 3)) @ cell + origin
+            lines.extend([
+                "4",
+                'Lattice="' + " ".join(str(value) for value in cell.ravel())
+                + '" Origin="' + " ".join(str(value) for value in origin) + '"',
+            ])
+            lines.extend(
+                f"{name} {x:.8f} {y:.8f} {z:.8f}"
+                for name, (x, y, z) in zip(species, positions)
+            )
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        for source_selection in (slice(0, 8), (1, 2, 5, 6)):
+            for shift in (False, True):
+                with self.subTest(source_selection=source_selection, shift=shift):
+                    options = dict(
+                        frames=source_selection, normalize_species_order=False,
+                        shift_by_origin=shift,
+                    )
+                    with (
+                        load_trajectory(path, **options) as trajectory,
+                        load_trajectory(path, **options) as reference,
+                    ):
+                        self.assertIsNotNone(trajectory.source.frame_species_codes)
+                        self.assertFalse(hasattr(trajectory.universe.trajectory, "_offsets"))
+                        for indices in ((len(trajectory) - 1,), (1, 3), (3, 0, 2)):
+                            frames = list(trajectory.iter_frames(indices))
+                            for logical_index, actual in zip(indices, frames):
+                                expected = reference.frame(logical_index)
+                                self.assertEqual(actual.index, logical_index)
+                                self.assertEqual(actual.source_index, expected.source_index)
+                                np.testing.assert_array_equal(actual.positions, expected.positions)
+                                np.testing.assert_array_equal(actual.species, expected.species)
+                                np.testing.assert_array_equal(
+                                    actual.dimensions, expected.dimensions
+                                )
+                                np.testing.assert_array_equal(actual.origin, expected.origin)
 
 
 if __name__ == "__main__":

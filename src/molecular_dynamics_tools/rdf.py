@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import combinations_with_replacement
 from numbers import Integral
@@ -30,6 +30,11 @@ from .trajectory import Trajectory
 Pair = tuple[str, str]
 ModeSpec = int | Literal["auto"] | Mapping[Pair, int]
 _WORKER_TRAJECTORY: Trajectory | None = None
+# A full long-range neighbor list can contain billions of directed pairs.
+# Keep its size proportional to a small number of query atoms, not N squared;
+# spectral basis scratch is independently bounded by the distance block size.
+_QUERY_BATCH_SIZE = 128
+_DISTANCE_BLOCK_SIZE = 65_536
 
 
 def _normalize_pairs(
@@ -275,6 +280,50 @@ def _fit_mode_elbow(
     }
 
 
+def _iter_pair_distances(
+    box: freud.box.Box,
+    left_positions: NDArray[np.float32],
+    right_positions: NDArray[np.float32],
+    r_min: float,
+    r_max: float,
+    *,
+    same_species: bool,
+) -> Iterator[NDArray[np.float32]]:
+    """Yield bounded distance blocks, excluding only true self pairs.
+
+    Freud numbers query points from zero in every batch. Its ``exclude_ii``
+    would therefore exclude the wrong atoms after the first batch. Compare
+    the global query index explicitly; distinct coincident atoms remain pairs.
+    """
+
+    query = freud.locality.AABBQuery(box, right_positions)
+    for start in range(0, len(left_positions), _QUERY_BATCH_SIZE):
+        neighbor_list = query.query(
+            left_positions[start : start + _QUERY_BATCH_SIZE],
+            {
+                "mode": "ball",
+                "r_min": r_min,
+                "r_max": r_max,
+                "exclude_ii": False,
+            },
+        ).toNeighborList()
+        for block_start in range(0, len(neighbor_list), _DISTANCE_BLOCK_SIZE):
+            block = slice(block_start, block_start + _DISTANCE_BLOCK_SIZE)
+            distances = np.asarray(neighbor_list.distances)[block]
+            if same_species:
+                keep = (
+                    np.asarray(neighbor_list.point_indices)[block]
+                    != np.asarray(neighbor_list.query_point_indices)[block] + start
+                )
+                distances = distances[keep]
+            # Do not let the consumer's last block retain an entire neighbor
+            # list while the next query is being allocated.
+            if len(distances):
+                yield distances.copy()
+            del distances
+        del neighbor_list
+
+
 def _accumulate_rdf_chunk(
     trajectory: Trajectory,
     frame_indices: Sequence[int],
@@ -304,18 +353,12 @@ def _accumulate_rdf_chunk(
             same_species = left == right
             if not len(left_positions) or not len(right_positions):
                 continue
-            neighbor_list = freud.locality.AABBQuery(box, right_positions).query(
-                left_positions,
-                {
-                    "mode": "ball",
-                    "r_min": r_min,
-                    "r_max": r_max,
-                    "exclude_ii": same_species,
-                },
-            ).toNeighborList()
-            if len(neighbor_list):
+            for distances in _iter_pair_distances(
+                box, left_positions, right_positions, r_min, r_max,
+                same_species=same_species,
+            ):
                 counts[pair_index] += np.histogram(
-                    np.asarray(neighbor_list.distances), bins=bin_edges
+                    distances, bins=bin_edges
                 )[0]
             possible_neighbors = len(right_positions) - int(same_species)
             if possible_neighbors > 0:
@@ -387,17 +430,11 @@ def _accumulate_spectral_chunk(
             same_species = left == right
             if not len(left_positions) or not len(right_positions):
                 continue
-            neighbor_list = freud.locality.AABBQuery(box, right_positions).query(
-                left_positions,
-                {
-                    "mode": "ball",
-                    "r_min": r_min,
-                    "r_max": r_max,
-                    "exclude_ii": same_species,
-                },
-            ).toNeighborList()
-            if len(neighbor_list):
-                distances = np.asarray(neighbor_list.distances, dtype=np.float64)
+            for distance_block in _iter_pair_distances(
+                box, left_positions, right_positions, r_min, r_max,
+                same_species=same_species,
+            ):
+                distances = np.asarray(distance_block, dtype=np.float64)
                 if np.any(distances <= 0.0):
                     raise ValueError(
                         "spectral RDFs are undefined for zero-distance atom pairs"
@@ -599,6 +636,10 @@ def compute_rdfs(
     Spawned workers receive the indexed Universe once in their initializer and
     then receive only contiguous frame-index chunks. Coordinates are not cached
     in the parent or transferred between processes.
+
+    Neighbor queries use at most 128 query atoms per batch. Distance blocks
+    contain at most 65,536 pairs, avoiding a full N-by-N neighbor list even
+    when the cutoff approaches half the periodic cell size.
     """
 
     if not isinstance(trajectory, Trajectory):
@@ -685,7 +726,9 @@ def compute_spectral_rdfs(
     selected pair cutoffs. Step controls only the returned sampling grid.
 
     Distances are accumulated into coefficients one frame at a time and are
-    never cached or transferred between processes.
+    never cached or transferred between processes. Neighbor queries use at
+    most 128 query atoms; the cosine-basis scratch arrays hold at most 65,536
+    distances at a time.
     """
 
     if not isinstance(trajectory, Trajectory):

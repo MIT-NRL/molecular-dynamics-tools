@@ -4,9 +4,12 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import MDAnalysis as mda
 import numpy as np
+from MDAnalysis.lib.distances import distance_array
+from MDAnalysis.lib.mdamath import triclinic_vectors
 from threadpoolctl import threadpool_info
 
 from molecular_dynamics_tools import (
@@ -19,6 +22,10 @@ from molecular_dynamics_tools._execution import (
     available_cpu_ids,
     freud_thread_limit,
     plan_execution,
+)
+from molecular_dynamics_tools.rdf import (
+    _accumulate_rdf_chunk,
+    _accumulate_spectral_chunk,
 )
 
 _LARGE_TRAJECTORY_ENV = os.environ.get("MDT_LARGE_TRAJECTORY")
@@ -45,6 +52,140 @@ def write_rdf_xyz(path: Path, *, frame_count: int = 16) -> None:
             x, y, z = positions[atom_index]
             lines.append(f"{species[atom_index]} {x:.8f} {y:.8f} {z:.8f}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+class BoundedRDFTests(unittest.TestCase):
+    """Compare batched directed pairs with an independent dense reference."""
+
+    def _trajectory(self, *, triclinic=False, coincident=False):
+        dimensions = np.asarray(
+            [12, 12, 12, 73, 82, 78] if triclinic else [12, 12, 12, 90, 90, 90],
+            dtype=np.float32,
+        )
+        # More than 128 atoms of one species exercises the real default batch
+        # boundary, including a coincident pair spanning that boundary.
+        names = np.asarray(["A"] * 140 + ["B"] * 25)
+        rng = np.random.default_rng(1423)
+        positions = (rng.random((len(names), 3)) - 0.5) @ triclinic_vectors(dimensions)
+        if coincident:
+            positions[139] = positions[2]
+            positions[140] = positions[2]
+        universe = mda.Universe.empty(len(names))
+        universe.add_TopologyAttr("names", names)
+        universe.load_new(
+            np.asarray([positions], dtype=np.float32),
+            order="fac", dimensions=np.asarray([dimensions]),
+        )
+        trajectory = load_trajectory(universe, atom_attribute="names")
+        self.addCleanup(trajectory.universe.trajectory.close)
+        return trajectory
+
+    def _dense_distances(self, trajectory, pair, r_min, r_max):
+        frame = next(trajectory.iter_frames())
+        left, right = (frame.positions_of(name) for name in pair)
+        distances = distance_array(left, right, box=frame.dimensions)
+        keep = (distances >= r_min) & (distances < r_max)
+        if pair[0] == pair[1]:
+            np.fill_diagonal(keep, False)
+        volume = abs(np.linalg.det(triclinic_vectors(frame.dimensions)))
+        scale = len(left) * (len(right) - int(pair[0] == pair[1])) / volume
+        return distances[keep], scale
+
+    def test_histogram_counts_self_offsets_coincident_pairs_and_normalization(self):
+        pairs = (("A", "A"), ("A", "B"), ("B", "A"), ("B", "B"))
+        for triclinic in (False, True):
+            for r_min in (0.0, 0.4):
+                with self.subTest(triclinic=triclinic, r_min=r_min):
+                    trajectory = self._trajectory(triclinic=triclinic, coincident=True)
+                    edges = np.linspace(r_min, 4.0, 31)
+                    with freud_thread_limit(1):
+                        counts, scales = _accumulate_rdf_chunk(
+                            trajectory, (0,), pairs, edges
+                        )
+                    for index, pair in enumerate(pairs):
+                        distances, scale = self._dense_distances(
+                            trajectory, pair, r_min, 4.0
+                        )
+                        np.testing.assert_array_equal(
+                            counts[index], np.histogram(distances, bins=edges)[0]
+                        )
+                        self.assertAlmostEqual(scales[index], scale, places=5)
+
+    def test_spectral_coefficients_match_dense_reference_across_small_blocks(self):
+        pairs = (("A", "A"), ("A", "B"), ("B", "A"))
+        modes = (4, 7, 5)
+        r_min, r_max = 0.2, 4.0
+        interval = r_max - r_min
+        for triclinic in (False, True):
+            with self.subTest(triclinic=triclinic):
+                trajectory = self._trajectory(triclinic=triclinic)
+                with (
+                    patch("molecular_dynamics_tools.rdf._QUERY_BATCH_SIZE", 7),
+                    patch("molecular_dynamics_tools.rdf._DISTANCE_BLOCK_SIZE", 9),
+                    freud_thread_limit(1),
+                ):
+                    sums, scales = _accumulate_spectral_chunk(
+                        trajectory, (0,), pairs, modes, r_min, r_max
+                    )
+                for index, (pair, mode_count) in enumerate(zip(pairs, modes, strict=True)):
+                    distances, scale = self._dense_distances(
+                        trajectory, pair, r_min, r_max
+                    )
+                    weights = 1.0 / (4 * np.pi * distances**2)
+                    expected = np.zeros(max(modes) + 1)
+                    expected[0] = weights.sum() / np.sqrt(interval)
+                    for mode in range(1, mode_count + 1):
+                        expected[mode] = np.sqrt(2 / interval) * np.dot(
+                            weights, np.cos(mode * np.pi * (distances - r_min) / interval)
+                        )
+                    # Freud wraps and evaluates distances in float32; very
+                    # close pairs amplify its error through the 1/r² weight.
+                    np.testing.assert_allclose(sums[index], expected, rtol=2e-5, atol=5e-5)
+                    self.assertAlmostEqual(scales[index], scale, places=5)
+
+                with (
+                    patch("molecular_dynamics_tools.rdf._QUERY_BATCH_SIZE", 1000),
+                    patch("molecular_dynamics_tools.rdf._DISTANCE_BLOCK_SIZE", 100_000),
+                    freud_thread_limit(1),
+                ):
+                    unbatched_sums, unbatched_scales = _accumulate_spectral_chunk(
+                        trajectory, (0,), pairs, modes, r_min, r_max
+                    )
+                np.testing.assert_allclose(sums, unbatched_sums, rtol=1e-13, atol=1e-13)
+                np.testing.assert_array_equal(scales, unbatched_scales)
+
+    def test_two_workers_preserve_rdf_and_faber_ziman_normalization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "two-frames.xyz"
+            write_rdf_xyz(path, frame_count=2)
+            trajectory = load_trajectory(path)
+            try:
+                options = dict(
+                    pairs=(("A", "A"), ("A", "B"), ("B", "B")),
+                    step=0.2, r_range=(0.0, 4.0), show_progress=False,
+                )
+                serial = compute_rdfs(trajectory, ncore=1, backend="serial", **options)
+                parallel = compute_rdfs(
+                    trajectory, ncore=2, backend="multiprocessing", **options
+                )
+                np.testing.assert_array_equal(serial.to_numpy(), parallel.to_numpy())
+                scattering_options = dict(
+                    elements={"A": "Li", "B": "F"}, probes=("neutron",),
+                    q_range=(0.0, 4.0), q_step=0.2,
+                )
+                serial_sq = compute_scattering(serial, **scattering_options)
+                parallel_sq = compute_scattering(parallel, **scattering_options)
+                np.testing.assert_array_equal(
+                    serial_sq.neutron.structure_factor.to_numpy(),
+                    parallel_sq.neutron.structure_factor.to_numpy(),
+                )
+            finally:
+                trajectory.universe.trajectory.close()
+
+    def test_spectral_coincident_distinct_atoms_still_raise(self):
+        trajectory = self._trajectory(coincident=True)
+        with freud_thread_limit(1), self.assertRaisesRegex(ValueError, "zero-distance"):
+            _accumulate_spectral_chunk(trajectory, (0,), (("A", "A"),), (4,), 0.0, 4.0)
 
 
 class RDFTests(unittest.TestCase):

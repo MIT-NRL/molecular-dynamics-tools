@@ -13,6 +13,7 @@ Main features:
 - Bond-angle distributions
 - Distance and shared-neighbor clustering
 - Periodic percolation analysis
+- Carbon ring identities and periodic graphenic-domain geometry
 - Reusable, provenance-aware result caching
 
 ## Installation
@@ -98,7 +99,8 @@ and prints its location and size. The original file is unchanged.
 ## Backends and result conventions
 
 - **MDAnalysis** reads trajectory and topology formats and supplies atom
-  selections. It is the trajectory I/O layer, not a separate analysis method.
+  selections. It also supplies minimum-image distances for carbon bonded-edge
+  geometry.
 - **freud** supplies periodic simulation boxes, minimum-image distances, and
   neighbor searches used by the structural calculations.
 - **NumPy, pandas, and SciPy** provide numerical operations, labeled result
@@ -111,7 +113,8 @@ Table-based calculations return pandas `DataFrame` objects: the first column
 is the independent coordinate and the remaining columns are labeled results.
 Calculation settings and execution details are stored in `DataFrame.attrs`.
 More structured analyses return result dataclasses containing named tables and
-a `metadata` dictionary.
+a `metadata` dictionary. The single-frame carbon API returns a dictionary of
+named row lists, ring counts, and method metadata.
 
 ## Radial distribution functions
 
@@ -385,6 +388,48 @@ per-frame statistics, and periodic percolation summaries. `connections`
 selects returned networks; `min_shared_neighbors` independently sets the
 percolation edge rule. By default, both methods omit isolated size-one
 components. Percolation detects connections that wrap the periodic box.
+
+## Carbon graphenic domains
+
+Reuse a full bonded graph rather than thinning atoms or building another
+neighbor list. Here `positions` is an N×3 array in Å, `cell` contains the three
+lattice vectors as rows, and `adjacency[i]` contains the bonded atom indices
+for atom `i`, using a caller-selected cutoff.
+
+```python
+ring_cycles = mdt.shortest_path_ring_cycles(adjacency, maximum_ring_size=8)
+graphenic = mdt.analyze_graphenic_structure(
+    positions,
+    cell,
+    adjacency,
+    ring_cycles=ring_cycles,
+    pbc=True,
+    normal_thresholds_deg=(1.0, 2.0),
+)
+graphenic["threshold_summaries"]
+graphenic["crystallites"]
+graphenic["size_distributions"]
+graphenic["metadata"]
+```
+
+This geometric adaptation follows the hexagon-normal and junction method in
+[Putman et al., Carbon 209, 117965 (2023)](https://doi.org/10.1016/j.carbon.2023.03.040).
+It reports 1°/2° sensitivity separately. Wrapping domains retain periodic flags
+and have no finite size or thickness. Finite `sqrt_area_size_A` is a geometric
+length, separate from diffraction `La(10)`.
+Bounded integer lattice reduction precedes MDAnalysis triclinic minimum-image
+calculations; ring searches and edge batches also have explicit work limits.
+See [carbon conventions and outputs](docs/carbon.md) for the adaptation,
+distributions, input requirements, and limits.
+
+Carbon diffraction comparisons additionally expose
+`fit_carbon_diffraction_peak`, `summarize_crystallite_size_distribution`,
+`carbon_xray_form_factor`, `carbon_debye_pattern` and
+`calibrate_graphene_diffraction`. They provide asymmetric peak diagnostics,
+apparent diffraction coherence lengths, exact geometric intensity-proxy
+weights and bounded isolated-graphene calibration patterns. See
+[carbon diffraction conventions](docs/carbon_diffraction.md) for normalization,
+fit quality gates, size definitions and Fig. 3/Fig. 8 comparisons.
 
 ## Result caching
 

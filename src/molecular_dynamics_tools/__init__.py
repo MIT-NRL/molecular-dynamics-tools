@@ -9,6 +9,18 @@ __version__ = "0.2.0"
 if TYPE_CHECKING:
     from . import cache, clustering
     from .angles import AngleDefinition, compute_bond_angles
+    from .carbon import (
+        GraphenicAnalysisError,
+        analyze_graphenic_structure,
+        shortest_path_ring_cycles,
+    )
+    from .carbon_diffraction import (
+        calibrate_graphene_diffraction,
+        carbon_debye_pattern,
+        carbon_xray_form_factor,
+        fit_carbon_diffraction_peak,
+        summarize_crystallite_size_distribution,
+    )
     from .coordination import (
         CoordinationDefinition,
         compute_coordination,
@@ -37,6 +49,27 @@ if TYPE_CHECKING:
 
 
 _LAZY_EXPORTS = {
+    "calibrate_graphene_diffraction": (
+        "molecular_dynamics_tools.carbon_diffraction", "calibrate_graphene_diffraction"
+    ),
+    "carbon_debye_pattern": (
+        "molecular_dynamics_tools.carbon_diffraction", "carbon_debye_pattern"
+    ),
+    "carbon_xray_form_factor": (
+        "molecular_dynamics_tools.carbon_diffraction", "carbon_xray_form_factor"
+    ),
+    "fit_carbon_diffraction_peak": (
+        "molecular_dynamics_tools.carbon_diffraction", "fit_carbon_diffraction_peak"
+    ),
+    "summarize_crystallite_size_distribution": (
+        "molecular_dynamics_tools.carbon_diffraction", "summarize_crystallite_size_distribution"
+    ),
+    "GraphenicAnalysisError": ("molecular_dynamics_tools.carbon", "GraphenicAnalysisError"),
+    "analyze_graphenic_structure": (
+        "molecular_dynamics_tools.carbon",
+        "analyze_graphenic_structure",
+    ),
+    "shortest_path_ring_cycles": ("molecular_dynamics_tools.carbon", "shortest_path_ring_cycles"),
     "AngleDefinition": ("molecular_dynamics_tools.angles", "AngleDefinition"),
     "compute_bond_angles": (
         "molecular_dynamics_tools.angles",
@@ -143,6 +176,14 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "calibrate_graphene_diffraction",
+    "carbon_debye_pattern",
+    "carbon_xray_form_factor",
+    "fit_carbon_diffraction_peak",
+    "summarize_crystallite_size_distribution",
+    "GraphenicAnalysisError",
+    "analyze_graphenic_structure",
+    "shortest_path_ring_cycles",
     "AngleDefinition",
     "CoordinationDefinition",
     "Trajectory",
